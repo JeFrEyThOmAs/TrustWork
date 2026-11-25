@@ -7,7 +7,6 @@ import { ethers } from 'ethers';
 import express from 'express';
 import { chain } from './blockchain.js';
 import {
-  canonicalize,
   computeAmendmentDigest,
   computeCompleteAgreementDigest,
   computeCredentialDigest,
@@ -39,6 +38,10 @@ const ISSUER_TIER_ENUM = {
 const AGREEMENT_STATUS_NAMES = ['NONE', 'ACTIVE', 'SUPERSEDED', 'COMPLETED', 'TERMINATED'];
 const ISSUER_TIER_NAMES = ['INDIVIDUAL', 'VERIFIED_ORG', 'ENTERPRISE', 'PLATFORM'];
 
+function hashPassword(pw) {
+  return crypto.createHash('sha256').update(`trustwork:${pw}`).digest('hex');
+}
+
 export const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -53,6 +56,8 @@ function sanitizeIdentity(row) {
     email: row.email,
     bio: row.bio,
     role: row.role,
+    hourlyRate: row.hourly_rate,
+    location: row.location,
     organization: row.organization,
     domain: row.domain,
     issuerTier: row.issuer_tier,
@@ -71,6 +76,7 @@ function hydrateAgreement(row, identitiesByDid, allMilestonesByAgreement) {
   const freelancer = identitiesByDid[row.freelancer_did];
   return {
     id: row.id,
+    gigId: row.gig_id,
     rootAgreementId: row.root_agreement_id,
     parentAgreementId: row.parent_agreement_id,
     supersededById: row.superseded_by_id,
@@ -83,9 +89,11 @@ function hydrateAgreement(row, identitiesByDid, allMilestonesByAgreement) {
     clientName: client?.name || row.client_did,
     clientOrganization: client?.organization || '',
     clientTier: client?.issuerTier || 'INDIVIDUAL',
+    clientAvatarColor: client?.avatarColor || '#0284C7',
     freelancerDid: row.freelancer_did,
     freelancerAddress: row.freelancer_address,
     freelancerName: freelancer?.name || row.freelancer_did,
+    freelancerAvatarColor: freelancer?.avatarColor || '#4F46E5',
     proposedByDid: row.proposed_by_did,
     startDate: row.start_date,
     deadline: row.deadline,
@@ -124,7 +132,7 @@ async function resolveSignature({ actorDid, digestHex, providedSignature }) {
     const recovered = recoverDigestSigner(digestHex, providedSignature);
     if (!recovered || ethers.getAddress(recovered) !== ethers.getAddress(row.address)) {
       throw new Error(
-        `Cryptographic signature mismatch: expected signer ${row.address}, recovered ${recovered || 'invalid'}`
+        `Cryptographic signature mismatch: expected ${row.address}, recovered ${recovered || 'invalid'}`
       );
     }
     return { signature: providedSignature, identityRow: row };
@@ -132,7 +140,7 @@ async function resolveSignature({ actorDid, digestHex, providedSignature }) {
 
   if (!row.demo_private_key) {
     throw new Error(
-      `External wallet required: DID ${actorDid} does not use the local demo keyring. Sign with MetaMask/wallet.`
+      `External wallet required: sign this transaction using your connected MetaMask wallet (${row.address}).`
     );
   }
 
@@ -141,7 +149,7 @@ async function resolveSignature({ actorDid, digestHex, providedSignature }) {
 }
 
 // ============================================================================
-// BOOTSTRAP & OVERVIEW
+// BOOTSTRAP MARKETPLACE & BLOCKCHAIN STATE
 // ============================================================================
 app.get('/api/bootstrap', async (_req, res) => {
   try {
@@ -149,6 +157,9 @@ app.get('/api/bootstrap', async (_req, res) => {
     const chainStatus = await chain.getChainStatus();
 
     const rawIdentities = db.prepare('SELECT * FROM identities ORDER BY created_at ASC').all();
+    const rawGigs = db.prepare('SELECT * FROM gigs ORDER BY created_at DESC').all();
+    const rawProposals = db.prepare('SELECT * FROM proposals ORDER BY created_at DESC').all();
+    const rawMessages = db.prepare('SELECT * FROM messages ORDER BY created_at ASC').all();
     const rawAgreements = db.prepare('SELECT * FROM agreements ORDER BY created_at DESC').all();
     const rawMilestones = db.prepare('SELECT * FROM milestones ORDER BY idx ASC').all();
     const rawCredentials = db
@@ -165,6 +176,27 @@ app.get('/api/bootstrap', async (_req, res) => {
       rawIdMap[r.did] = r;
       sanitizedIdMap[r.did] = sanitizeIdentity(r);
     }
+
+    const enrichedIdentities = rawIdentities.map((row) => {
+      const base = sanitizedIdMap[row.did];
+      const subjectCreds = rawCredentials.filter((c) => c.subject_did === row.did);
+      const subjectAgreements = rawAgreements.filter(
+        (a) => a.freelancer_did === row.did || a.client_did === row.did
+      );
+      const subjectMilestones = rawMilestones.filter((m) =>
+        subjectAgreements.some((a) => a.id === m.agreement_id && a.freelancer_did === row.did)
+      );
+      const reputation = computeFreelancerReputation({
+        identity: row,
+        credentials: subjectCreds,
+        agreements: subjectAgreements,
+        milestones: subjectMilestones,
+        allCredentials: rawCredentials,
+        identitiesByDid: rawIdMap,
+      });
+      sanitizedIdMap[row.did] = { ...base, reputation };
+      return sanitizedIdMap[row.did];
+    });
 
     const milestonesByAg = {};
     for (const m of rawMilestones) {
@@ -196,24 +228,62 @@ app.get('/api/bootstrap', async (_req, res) => {
       });
     }
 
-    const enrichedIdentities = rawIdentities.map((row) => {
-      const base = sanitizedIdMap[row.did];
-      const subjectCreds = rawCredentials.filter((c) => c.subject_did === row.did);
-      const subjectAgreements = rawAgreements.filter(
-        (a) => a.freelancer_did === row.did || a.client_did === row.did
-      );
-      const subjectMilestones = rawMilestones.filter((m) =>
-        subjectAgreements.some((a) => a.id === m.agreement_id && a.freelancer_did === row.did)
-      );
-      const reputation = computeFreelancerReputation({
-        identity: row,
-        credentials: subjectCreds,
-        agreements: subjectAgreements,
-        milestones: subjectMilestones,
-        allCredentials: rawCredentials,
-        identitiesByDid: rawIdMap,
-      });
-      return { ...base, reputation };
+    const hydratedProposals = rawProposals.map((p) => {
+      const freelancer = sanitizedIdMap[p.freelancer_did];
+      const gig = rawGigs.find((g) => g.id === p.gig_id);
+      return {
+        id: p.id,
+        gigId: p.gig_id,
+        gigTitle: gig?.title || p.gig_id,
+        posterDid: gig?.poster_did || '',
+        freelancerDid: p.freelancer_did,
+        freelancerName: freelancer?.name || p.freelancer_did,
+        freelancerHeadline: freelancer?.headline || '',
+        freelancerAvatarColor: freelancer?.avatarColor || '#4F46E5',
+        freelancerEvidenceScore: freelancer?.reputation?.evidenceScore ?? 0,
+        freelancerSkills: freelancer?.skills || [],
+        coverLetter: p.cover_letter,
+        proposedCost: p.proposed_cost,
+        currency: p.currency,
+        proposedDurationDays: p.proposed_duration_days,
+        proposedDeadline: p.proposed_deadline,
+        proposedFeatures: JSON.parse(p.proposed_features_json || '[]'),
+        proposedMilestones: JSON.parse(p.proposed_milestones_json || '[]'),
+        status: p.status,
+        agreementId: p.agreement_id,
+        createdAt: p.created_at,
+      };
+    });
+
+    const hydratedGigs = rawGigs.map((g) => {
+      const poster = sanitizedIdMap[g.poster_did];
+      const gigProposals = hydratedProposals.filter((p) => p.gigId === g.id);
+      return {
+        id: g.id,
+        posterDid: g.poster_did,
+        posterName: poster?.name || g.poster_did,
+        posterOrganization: poster?.organization || '',
+        posterTier: poster?.issuerTier || 'INDIVIDUAL',
+        posterKyb: poster?.kybVerified || false,
+        posterAvatarColor: poster?.avatarColor || '#0284C7',
+        title: g.title,
+        description: g.description,
+        category: g.category,
+        budgetMin: g.budget_min,
+        budgetMax: g.budget_max,
+        currency: g.currency,
+        durationDays: g.duration_days,
+        deadline: g.deadline,
+        experienceLevel: g.experience_level,
+        skills: JSON.parse(g.skills_json || '[]'),
+        features: JSON.parse(g.features_json || '[]'),
+        status: g.status,
+        hiredFreelancerDid: g.hired_freelancer_did,
+        rootAgreementId: g.root_agreement_id,
+        proposalCount: gigProposals.length,
+        proposals: gigProposals,
+        createdAt: g.created_at,
+      };
     });
 
     const hydratedAgreements = rawAgreements.map((a) =>
@@ -259,6 +329,17 @@ app.get('/api/bootstrap', async (_req, res) => {
       };
     });
 
+    const hydratedMessages = rawMessages.map((m) => ({
+      id: m.id,
+      threadId: m.thread_id,
+      senderDid: m.sender_did,
+      senderName: sanitizedIdMap[m.sender_did]?.name || m.sender_did,
+      senderAvatarColor: sanitizedIdMap[m.sender_did]?.avatarColor || '#4F46E5',
+      body: m.body,
+      messageType: m.message_type,
+      createdAt: m.created_at,
+    }));
+
     const offChainBytes =
       rawAgreements.reduce((acc, a) => acc + Buffer.byteLength(a.canonical_payload_json, 'utf8'), 0) +
       rawCredentials.reduce((acc, c) => acc + Buffer.byteLength(c.vc_json, 'utf8'), 0);
@@ -268,6 +349,9 @@ app.get('/api/bootstrap', async (_req, res) => {
     res.json({
       chainStatus,
       identities: enrichedIdentities,
+      gigs: hydratedGigs,
+      proposals: hydratedProposals,
+      messages: hydratedMessages,
       agreements: hydratedAgreements,
       credentials: hydratedCredentials,
       zkpProofs: rawZkp.map((z) => ({
@@ -301,16 +385,32 @@ app.get('/api/bootstrap', async (_req, res) => {
 });
 
 // ============================================================================
-// 1. SELF-CONTROLLED DID & ISSUER REGISTRY
+// AUTHENTICATION & UNIFIED USER ACCOUNTS (BOTH FREELANCER + GIG PROVIDER)
 // ============================================================================
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body;
+  const row = db
+    .prepare('SELECT * FROM identities WHERE LOWER(email) = LOWER(?)')
+    .get(String(email || '').trim());
+  if (!row) {
+    return res.status(401).json({ error: 'No account found with that email address' });
+  }
+  if (row.password_hash && password && hashPassword(password) !== row.password_hash) {
+    return res.status(401).json({ error: 'Incorrect password (demo accounts use password: demo123)' });
+  }
+  res.json({ identity: sanitizeIdentity(row) });
+});
+
 app.post('/api/identities', async (req, res) => {
   try {
     const {
       name,
-      headline = '',
+      headline = 'Freelance Engineer & Gig Creator',
       email = '',
+      password = 'demo123',
       bio = '',
-      role = 'FREELANCER',
+      hourlyRate = 3000,
+      location = 'India (Remote)',
       organization = '',
       domain = '',
       issuerTier = 'INDIVIDUAL',
@@ -319,7 +419,7 @@ app.post('/api/identities', async (req, res) => {
     } = req.body;
 
     if (!name || !String(name).trim()) {
-      return res.status(400).json({ error: 'Name is required' });
+      return res.status(400).json({ error: 'Full name is required' });
     }
 
     let address;
@@ -335,7 +435,7 @@ app.post('/api/identities', async (req, res) => {
     const did = formatDid(address);
     const existing = db.prepare('SELECT did FROM identities WHERE did = ?').get(did);
     if (existing) {
-      return res.status(409).json({ error: `DID ${did} is already registered` });
+      return res.status(409).json({ error: `Account with wallet ${address} already exists` });
     }
 
     const { hash: profileHash } = keccak256Json({ did, name, organization, domain });
@@ -346,29 +446,31 @@ app.post('/api/identities', async (req, res) => {
       [address, did, tierNum, profileHash],
       {
         actorAddress: address,
-        summary: `Registered Self-Controlled DID ${did.slice(0, 24)}... (${name})`,
+        summary: `Registered TrustWork Account & DID (${name})`,
         referenceId: did,
       }
     );
 
-    const palette = ['#E11D48', '#0284C7', '#F59E0B', '#059669', '#7C3AED'];
+    const palette = ['#4F46E5', '#0284C7', '#059669', '#D97706', '#E11D48', '#7C3AED'];
     const avatarColor = palette[Math.floor(Math.random() * palette.length)];
     const nowIso = new Date().toISOString();
 
     db.prepare(`
       INSERT INTO identities (
-        did, address, name, headline, email, bio, role, organization, domain,
-        issuer_tier, kyb_verified, skills_json, avatar_color, demo_private_key,
-        tx_hash, block_number, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        did, address, name, headline, email, password_hash, bio, role, hourly_rate, location,
+        organization, domain, issuer_tier, kyb_verified, skills_json, avatar_color,
+        demo_private_key, tx_hash, block_number, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'BOTH', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       did,
       address,
       String(name).trim(),
       String(headline).trim(),
       String(email).trim(),
+      hashPassword(password),
       String(bio).trim(),
-      role,
+      Number(hourlyRate) || 3000,
+      String(location).trim(),
       String(organization).trim(),
       String(domain).trim(),
       issuerTier,
@@ -388,12 +490,52 @@ app.post('/api/identities', async (req, res) => {
   }
 });
 
+app.put('/api/identities/:did', (req, res) => {
+  try {
+    const { did } = req.params;
+    const row = db.prepare('SELECT * FROM identities WHERE did = ?').get(did);
+    if (!row) return res.status(404).json({ error: 'Profile not found' });
+
+    const {
+      name = row.name,
+      headline = row.headline,
+      bio = row.bio,
+      hourlyRate = row.hourly_rate,
+      location = row.location,
+      organization = row.organization,
+      domain = row.domain,
+      skills = JSON.parse(row.skills_json || '[]'),
+    } = req.body;
+
+    db.prepare(`
+      UPDATE identities
+      SET name = ?, headline = ?, bio = ?, hourly_rate = ?, location = ?,
+          organization = ?, domain = ?, skills_json = ?
+      WHERE did = ?
+    `).run(
+      String(name).trim(),
+      String(headline).trim(),
+      String(bio).trim(),
+      Number(hourlyRate),
+      String(location).trim(),
+      String(organization).trim(),
+      String(domain).trim(),
+      JSON.stringify(skills),
+      did
+    );
+
+    res.json({ identity: sanitizeIdentity(db.prepare('SELECT * FROM identities WHERE did = ?').get(did)) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/identities/:did/tier', async (req, res) => {
   try {
     const { did } = req.params;
     const { issuerTier } = req.body;
     if (!(issuerTier in ISSUER_TIER_ENUM)) {
-      return res.status(400).json({ error: 'Invalid issuerTier' });
+      return res.status(400).json({ error: 'Invalid verification tier' });
     }
     const row = db.prepare('SELECT * FROM identities WHERE did = ?').get(did);
     if (!row) return res.status(404).json({ error: 'Identity not found' });
@@ -403,7 +545,7 @@ app.post('/api/identities/:did/tier', async (req, res) => {
       [row.address, ISSUER_TIER_ENUM[issuerTier]],
       {
         actorAddress: row.address,
-        summary: `Updated Issuer Registry Tier: ${row.name} -> ${issuerTier}`,
+        summary: `Verified Organization Tier Updated: ${row.name} -> ${issuerTier}`,
         referenceId: did,
       }
     );
@@ -421,12 +563,314 @@ app.post('/api/identities/:did/tier', async (req, res) => {
 });
 
 // ============================================================================
-// 2. DIGITAL AGREEMENTS & MUTUAL AMENDMENT PROTOCOL
+// FREELANCE GIG MARKETPLACE & PROPOSALS (ANY USER CAN POST OR APPLY)
 // ============================================================================
+app.post('/api/gigs', (req, res) => {
+  try {
+    const {
+      posterDid,
+      title,
+      description,
+      category = 'Full-Stack Development',
+      budgetMin,
+      budgetMax,
+      currency = 'INR',
+      durationDays = 21,
+      deadline,
+      experienceLevel = 'Intermediate / Senior',
+      skills = [],
+      features = [],
+    } = req.body;
+
+    if (!posterDid || !title || !description) {
+      return res.status(400).json({ error: 'Poster, title, and description are required' });
+    }
+    const poster = db.prepare('SELECT * FROM identities WHERE did = ?').get(posterDid);
+    if (!poster) return res.status(404).json({ error: 'Poster account not found' });
+
+    const gigId = `gig-${crypto.randomBytes(5).toString('hex')}`;
+    const computedDeadline =
+      deadline ||
+      new Date(Date.now() + Number(durationDays || 21) * 86400000).toISOString().slice(0, 10);
+
+    db.prepare(`
+      INSERT INTO gigs (
+        id, poster_did, title, description, category, budget_min, budget_max, currency,
+        duration_days, deadline, experience_level, skills_json, features_json, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
+    `).run(
+      gigId,
+      posterDid,
+      String(title).trim(),
+      String(description).trim(),
+      String(category).trim(),
+      Number(budgetMin || 50000),
+      Number(budgetMax || budgetMin || 100000),
+      currency,
+      Number(durationDays || 21),
+      computedDeadline,
+      experienceLevel,
+      JSON.stringify(Array.isArray(skills) ? skills : []),
+      JSON.stringify(Array.isArray(features) ? features : []),
+      new Date().toISOString()
+    );
+
+    res.status(201).json({ gigId });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/gigs/:gigId/proposals', (req, res) => {
+  try {
+    const { gigId } = req.params;
+    const {
+      freelancerDid,
+      coverLetter,
+      proposedCost,
+      currency = 'INR',
+      proposedDurationDays = 21,
+      proposedDeadline,
+      proposedFeatures = [],
+      proposedMilestones = [],
+    } = req.body;
+
+    const gig = db.prepare('SELECT * FROM gigs WHERE id = ?').get(gigId);
+    if (!gig) return res.status(404).json({ error: 'Gig not found' });
+    if (gig.status !== 'OPEN') {
+      return res.status(400).json({ error: 'This gig is no longer accepting new proposals' });
+    }
+    if (gig.poster_did === freelancerDid) {
+      return res.status(400).json({ error: 'You cannot submit a freelancer proposal to your own gig' });
+    }
+
+    const existing = db
+      .prepare("SELECT id FROM proposals WHERE gig_id = ? AND freelancer_did = ? AND status != 'DECLINED'")
+      .get(gigId, freelancerDid);
+    if (existing) {
+      return res.status(409).json({ error: 'You have already submitted a proposal for this gig' });
+    }
+
+    const propId = `prop-${crypto.randomBytes(5).toString('hex')}`;
+    const dl =
+      proposedDeadline ||
+      new Date(Date.now() + Number(proposedDurationDays || 21) * 86400000).toISOString().slice(0, 10);
+
+    const defaultFeatures =
+      proposedFeatures.length > 0
+        ? proposedFeatures
+        : JSON.parse(gig.features_json || '[]').map((f) => ({
+            name: f.name,
+            description: f.description || '',
+            acceptanceCriteria: f.acceptanceCriteria || 'Verified by client',
+          }));
+
+    const defaultMilestones =
+      proposedMilestones.length > 0
+        ? proposedMilestones
+        : [
+            {
+              title: 'Milestone 1: Core Architecture & Initial Build',
+              deliverables: 'Initial working module & source code',
+              dueDate: dl,
+              amount: Math.round(Number(proposedCost) * 0.5),
+            },
+            {
+              title: 'Milestone 2: Final Features, Testing & Handover',
+              deliverables: 'Production-ready build & documentation',
+              dueDate: dl,
+              amount: Number(proposedCost) - Math.round(Number(proposedCost) * 0.5),
+            },
+          ];
+
+    db.prepare(`
+      INSERT INTO proposals (
+        id, gig_id, freelancer_did, cover_letter, proposed_cost, currency,
+        proposed_duration_days, proposed_deadline, proposed_features_json,
+        proposed_milestones_json, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+    `).run(
+      propId,
+      gigId,
+      freelancerDid,
+      String(coverLetter || '').trim(),
+      Number(proposedCost),
+      currency || gig.currency,
+      Number(proposedDurationDays),
+      dl,
+      JSON.stringify(defaultFeatures),
+      JSON.stringify(defaultMilestones),
+      new Date().toISOString()
+    );
+
+    res.status(201).json({ proposalId: propId });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 /**
- * Prepare deterministic hashes & signing digest before external wallet / persona signing
+ * Gig Provider accepts a Freelancer Proposal -> Automatically creates & signs Digital Agreement v1!
+ * Counterparty (Freelancer) then reviews and co-signs to lock it onto the Blockchain.
  */
+app.post('/api/proposals/:proposalId/accept', async (req, res) => {
+  try {
+    const { proposalId } = req.params;
+    const { actorDid, customFeatures, customMilestones, customCost, customDeadline, signature = null } =
+      req.body;
+
+    const prop = db.prepare('SELECT * FROM proposals WHERE id = ?').get(proposalId);
+    if (!prop) return res.status(404).json({ error: 'Proposal not found' });
+
+    const gig = db.prepare('SELECT * FROM gigs WHERE id = ?').get(prop.gig_id);
+    if (!gig) return res.status(404).json({ error: 'Gig not found' });
+    if (gig.poster_did !== actorDid) {
+      return res.status(403).json({ error: 'Only the Gig Provider who posted this gig can accept proposals' });
+    }
+
+    const client = db.prepare('SELECT * FROM identities WHERE did = ?').get(gig.poster_did);
+    const freelancer = db.prepare('SELECT * FROM identities WHERE did = ?').get(prop.freelancer_did);
+
+    const startDate = new Date().toISOString().slice(0, 10);
+    const deadline = customDeadline || prop.proposed_deadline;
+    const totalCost = customCost !== undefined ? Number(customCost) : prop.proposed_cost;
+    const features = customFeatures || JSON.parse(prop.proposed_features_json || '[]');
+    const milestones = customMilestones || JSON.parse(prop.proposed_milestones_json || '[]');
+
+    const payload = buildCanonicalAgreementPayload({
+      version: 1,
+      parentAgreementId: null,
+      title: gig.title,
+      summary: gig.description,
+      category: gig.category,
+      clientDid: client.did,
+      freelancerDid: freelancer.did,
+      startDate,
+      deadline,
+      durationDays: prop.proposed_duration_days,
+      totalCost,
+      currency: prop.currency,
+      paymentSchedule: `Milestone-Based (${milestones.length} Stages)`,
+      features,
+      milestones,
+      clauses: {},
+      amendmentReason: '',
+    });
+
+    const { canonical, hash: termsHash } = keccak256Json(payload);
+    const seed = crypto.randomBytes(6).toString('hex');
+    const agreementId = ethers.keccak256(
+      ethers.toUtf8Bytes(`${client.did}:${freelancer.did}:v1:${termsHash}:${seed}`)
+    );
+
+    const signingDigest = computeInitialAgreementDigest({
+      agreementId,
+      gigProvider: client.address,
+      freelancer: freelancer.address,
+      termsHash,
+    });
+
+    const { signature: clientSig } = await resolveSignature({
+      actorDid: client.did,
+      digestHex: signingDigest,
+      providedSignature: signature,
+    });
+
+    const { cid: ipfsCid } = pinToIpfsVault(payload, {
+      type: 'DIGITAL_AGREEMENT_FROM_PROPOSAL',
+      proposalId,
+      agreementId,
+    });
+
+    const nowIso = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO agreements (
+        id, gig_id, root_agreement_id, parent_agreement_id, superseded_by_id, version,
+        title, summary, category, client_did, client_address, freelancer_did, freelancer_address,
+        proposed_by_did, start_date, deadline, duration_days, total_cost, currency, payment_schedule,
+        features_json, milestones_spec_json, clauses_json, amendment_reason,
+        canonical_payload_json, terms_hash, signing_digest, ipfs_cid,
+        client_signature, client_signed_at, freelancer_signature, freelancer_signed_at,
+        status, created_at
+      ) VALUES (?, ?, ?, NULL, NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, NULL, NULL, 'PENDING_SIGNATURES', ?)
+    `).run(
+      agreementId,
+      gig.id,
+      agreementId,
+      payload.title,
+      payload.summary,
+      payload.category,
+      client.did,
+      client.address,
+      freelancer.did,
+      freelancer.address,
+      client.did,
+      startDate,
+      deadline,
+      prop.proposed_duration_days,
+      totalCost,
+      prop.currency,
+      payload.compensation.paymentSchedule,
+      JSON.stringify(payload.features),
+      JSON.stringify(payload.milestones),
+      JSON.stringify(payload.clauses),
+      canonical,
+      termsHash,
+      signingDigest,
+      ipfsCid,
+      clientSig,
+      nowIso,
+      nowIso
+    );
+
+    db.prepare("UPDATE proposals SET status = 'ACCEPTED', agreement_id = ? WHERE id = ?").run(
+      agreementId,
+      proposalId
+    );
+
+    db.prepare(`
+      INSERT INTO messages (id, thread_id, sender_did, body, message_type, created_at)
+      VALUES (?, ?, ?, ?, 'SYSTEM', ?)
+    `).run(
+      `msg-${crypto.randomBytes(5).toString('hex')}`,
+      agreementId,
+      client.did,
+      `${client.name} accepted ${freelancer.name}'s proposal and signed Digital Agreement v1 (${prop.currency} ${totalCost.toLocaleString()}). Waiting for ${freelancer.name} to review & co-sign to store on blockchain.`,
+      nowIso
+    );
+
+    res.status(201).json({ agreementId, termsHash, ipfsCid });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// WORKSPACE MESSAGES / CHAT
+// ============================================================================
+app.post('/api/messages', (req, res) => {
+  try {
+    const { threadId, senderDid, body } = req.body;
+    if (!threadId || !senderDid || !String(body || '').trim()) {
+      return res.status(400).json({ error: 'threadId, senderDid, and message body required' });
+    }
+    const msgId = `msg-${crypto.randomBytes(5).toString('hex')}`;
+    const nowIso = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO messages (id, thread_id, sender_did, body, message_type, created_at)
+      VALUES (?, ?, ?, ?, 'TEXT', ?)
+    `).run(msgId, threadId, senderDid, String(body).trim(), nowIso);
+
+    res.status(201).json({ id: msgId, createdAt: nowIso });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// DUAL-SIGNED BLOCKCHAIN DIGITAL AGREEMENTS & MUTUAL AMENDMENT VERSIONING
+// ============================================================================
 app.post('/api/agreements/prepare', (req, res) => {
   try {
     const {
@@ -452,17 +896,17 @@ app.post('/api/agreements/prepare', (req, res) => {
     const client = db.prepare('SELECT * FROM identities WHERE did = ?').get(clientDid);
     const freelancer = db.prepare('SELECT * FROM identities WHERE did = ?').get(freelancerDid);
     if (!client || !freelancer) {
-      return res.status(400).json({ error: 'Both Gig Provider and Freelancer DIDs must exist' });
+      return res.status(400).json({ error: 'Both Gig Provider and Freelancer accounts must exist' });
     }
     if (client.did === freelancer.did) {
-      return res.status(400).json({ error: 'Gig Provider and Freelancer must be distinct parties' });
+      return res.status(400).json({ error: 'Gig Provider and Freelancer must be two different accounts' });
     }
 
     let version = 1;
     if (parentAgreementId) {
       const parent = db.prepare('SELECT * FROM agreements WHERE id = ?').get(parentAgreementId);
       if (!parent || parent.status !== 'ACTIVE') {
-        return res.status(400).json({ error: 'Parent agreement must be ACTIVE on-chain to amend' });
+        return res.status(400).json({ error: 'Parent agreement must be ACTIVE on-chain to modify' });
       }
       version = parent.version + 1;
     }
@@ -521,12 +965,10 @@ app.post('/api/agreements/prepare', (req, res) => {
   }
 });
 
-/**
- * Propose a brand-new Version 1 Digital Agreement (signed by Proposer; awaits Counterparty signature)
- */
 app.post('/api/agreements', async (req, res) => {
   try {
     const {
+      gigId = null,
       title,
       summary,
       category,
@@ -557,10 +999,10 @@ app.post('/api/agreements', async (req, res) => {
     const client = db.prepare('SELECT * FROM identities WHERE did = ?').get(clientDid);
     const freelancer = db.prepare('SELECT * FROM identities WHERE did = ?').get(freelancerDid);
     if (!client || !freelancer) {
-      return res.status(404).json({ error: 'Client or Freelancer DID not found' });
+      return res.status(404).json({ error: 'Client or Freelancer account not found' });
     }
     if (client.did === freelancer.did) {
-      return res.status(400).json({ error: 'Gig Provider and Freelancer must be two different parties' });
+      return res.status(400).json({ error: 'Gig Provider and Freelancer must be distinct users' });
     }
 
     const payload = buildCanonicalAgreementPayload({
@@ -613,16 +1055,17 @@ app.post('/api/agreements', async (req, res) => {
 
     db.prepare(`
       INSERT INTO agreements (
-        id, root_agreement_id, parent_agreement_id, superseded_by_id, version,
+        id, gig_id, root_agreement_id, parent_agreement_id, superseded_by_id, version,
         title, summary, category, client_did, client_address, freelancer_did, freelancer_address,
         proposed_by_did, start_date, deadline, duration_days, total_cost, currency, payment_schedule,
         features_json, milestones_spec_json, clauses_json, amendment_reason,
         canonical_payload_json, terms_hash, signing_digest, ipfs_cid,
         client_signature, client_signed_at, freelancer_signature, freelancer_signed_at,
         status, created_at
-      ) VALUES (?, ?, NULL, NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SIGNATURES', ?)
+      ) VALUES (?, ?, ?, NULL, NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SIGNATURES', ?)
     `).run(
       agreementId,
+      gigId,
       agreementId,
       payload.title,
       payload.summary,
@@ -664,9 +1107,6 @@ app.post('/api/agreements', async (req, res) => {
   }
 });
 
-/**
- * Counterparty co-signs a PENDING_SIGNATURES v1 agreement -> immediately anchors on EVM Blockchain!
- */
 app.post('/api/agreements/:id/cosign', async (req, res) => {
   try {
     const { id } = req.params;
@@ -691,10 +1131,9 @@ app.post('/api/agreements/:id/cosign', async (req, res) => {
     const freelancerSig = actorDid === ag.freelancer_did ? signature : ag.freelancer_signature;
 
     if (!clientSig || !freelancerSig) {
-      return res.status(400).json({ error: 'Both party signatures are required to anchor on-chain' });
+      return res.status(400).json({ error: 'Both party signatures are required to store on blockchain' });
     }
 
-    // Anchor on-chain via TrustWorkProtocol.sol (verifies BOTH signatures via ecrecover!)
     const receipt = await chain.sendTx(
       'anchorAgreement',
       [
@@ -738,7 +1177,12 @@ app.post('/api/agreements/:id/cosign', async (req, res) => {
       ag.id
     );
 
-    // Instantiate defined milestones for execution tracking
+    if (ag.gig_id) {
+      db.prepare(
+        "UPDATE gigs SET status = 'IN_CONTRACT', hired_freelancer_did = ?, root_agreement_id = ? WHERE id = ?"
+      ).run(ag.freelancer_did, ag.root_agreement_id, ag.gig_id);
+    }
+
     const milestoneSpecs = JSON.parse(ag.milestones_spec_json || '[]');
     const insertMs = db.prepare(`
       INSERT OR IGNORE INTO milestones (
@@ -760,16 +1204,23 @@ app.post('/api/agreements/:id/cosign', async (req, res) => {
       );
     }
 
+    db.prepare(`
+      INSERT INTO messages (id, thread_id, sender_did, body, message_type, created_at)
+      VALUES (?, ?, ?, ?, 'SYSTEM', ?)
+    `).run(
+      `msg-${crypto.randomBytes(5).toString('hex')}`,
+      ag.root_agreement_id,
+      actorDid,
+      `Both parties signed! Digital Agreement v1 is now locked on the blockchain at Block #${receipt.blockNumber}. Neither party can modify time, cost, or features without mutual approval.`,
+      nowIso
+    );
+
     res.json({ ok: true, agreementId: ag.id, status: 'ACTIVE', receipt });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-/**
- * Propose a Mutual Modification / Amendment to an ACTIVE on-chain agreement.
- * Parent agreement stays ACTIVE and untouched until the counterparty ALSO signs!
- */
 app.post('/api/agreements/:id/propose-amendment', async (req, res) => {
   try {
     const { id: parentId } = req.params;
@@ -797,23 +1248,22 @@ app.post('/api/agreements/:id/propose-amendment', async (req, res) => {
     if (!parent) return res.status(404).json({ error: 'Parent agreement not found' });
     if (parent.status !== 'ACTIVE') {
       return res.status(400).json({
-        error: `Only an ACTIVE agreement can be amended (current status: ${parent.status})`,
+        error: `Only an ACTIVE agreement can be modified (current status: ${parent.status})`,
       });
     }
     if (proposedByDid !== parent.client_did && proposedByDid !== parent.freelancer_did) {
-      return res.status(403).json({ error: 'Only one of the two original parties can propose an amendment' });
+      return res.status(403).json({ error: 'Only one of the two contracting parties can propose a change' });
     }
     if (!amendmentReason || !String(amendmentReason).trim()) {
-      return res.status(400).json({ error: 'Please provide an amendment reason summarizing the changes' });
+      return res.status(400).json({ error: 'Please summarize what is changing and why' });
     }
 
-    // Check if there is already a pending amendment on this parent
     const existingPending = db
       .prepare("SELECT id FROM agreements WHERE parent_agreement_id = ? AND status = 'AMENDMENT_PENDING'")
       .get(parentId);
     if (existingPending) {
       return res.status(409).json({
-        error: 'There is already a pending amendment awaiting counterparty review on this agreement.',
+        error: 'There is already a pending modification request awaiting the other party on this contract.',
       });
     }
 
@@ -840,7 +1290,7 @@ app.post('/api/agreements/:id/propose-amendment', async (req, res) => {
 
     const { canonical, hash: newTermsHash } = keccak256Json(payload);
     if (newTermsHash === parent.terms_hash) {
-      return res.status(400).json({ error: 'Amended terms are identical to the active agreement' });
+      return res.status(400).json({ error: 'Modified terms are identical to the current active agreement' });
     }
 
     const seed = nonceSeed || crypto.randomBytes(6).toString('hex');
@@ -859,7 +1309,7 @@ app.post('/api/agreements/:id/propose-amendment', async (req, res) => {
       newTermsHash,
     });
 
-    const { signature } = await resolveSignature({
+    const { signature, identityRow } = await resolveSignature({
       actorDid: proposedByDid,
       digestHex: signingDigest,
       providedSignature: proposerSignature,
@@ -876,16 +1326,17 @@ app.post('/api/agreements/:id/propose-amendment', async (req, res) => {
 
     db.prepare(`
       INSERT INTO agreements (
-        id, root_agreement_id, parent_agreement_id, superseded_by_id, version,
+        id, gig_id, root_agreement_id, parent_agreement_id, superseded_by_id, version,
         title, summary, category, client_did, client_address, freelancer_did, freelancer_address,
         proposed_by_did, start_date, deadline, duration_days, total_cost, currency, payment_schedule,
         features_json, milestones_spec_json, clauses_json, amendment_reason,
         canonical_payload_json, terms_hash, signing_digest, ipfs_cid,
         client_signature, client_signed_at, freelancer_signature, freelancer_signed_at,
         status, created_at
-      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'AMENDMENT_PENDING', ?)
+      ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'AMENDMENT_PENDING', ?)
     `).run(
       newAgreementId,
+      parent.gig_id,
       parent.root_agreement_id,
       parentId,
       newVersion,
@@ -918,6 +1369,17 @@ app.post('/api/agreements/:id/propose-amendment', async (req, res) => {
       nowIso
     );
 
+    db.prepare(`
+      INSERT INTO messages (id, thread_id, sender_did, body, message_type, created_at)
+      VALUES (?, ?, ?, ?, 'SYSTEM', ?)
+    `).run(
+      `msg-${crypto.randomBytes(5).toString('hex')}`,
+      parent.root_agreement_id,
+      proposedByDid,
+      `${identityRow.name} proposed Contract Modification v${newVersion}: "${amendmentReason}". Agreement v${parent.version} remains active until the other party co-signs.`,
+      nowIso
+    );
+
     res.status(201).json({
       newAgreementId,
       parentAgreementId: parentId,
@@ -932,19 +1394,15 @@ app.post('/api/agreements/:id/propose-amendment', async (req, res) => {
   }
 });
 
-/**
- * Counterparty co-signs an AMENDMENT_PENDING proposal -> executes TrustWorkProtocol.amendAgreement() on-chain,
- * marking parent version SUPERSEDED and minting the new ACTIVE agreement version!
- */
 app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
   try {
     const { id: amendmentId } = req.params;
     const { actorDid, signature: providedSignature = null } = req.body;
 
     const proposal = db.prepare('SELECT * FROM agreements WHERE id = ?').get(amendmentId);
-    if (!proposal) return res.status(404).json({ error: 'Amendment proposal not found' });
+    if (!proposal) return res.status(404).json({ error: 'Modification proposal not found' });
     if (proposal.status !== 'AMENDMENT_PENDING') {
-      return res.status(400).json({ error: `Proposal is not pending amendment (status: ${proposal.status})` });
+      return res.status(400).json({ error: `Proposal is not awaiting co-sign (status: ${proposal.status})` });
     }
 
     const parent = db.prepare('SELECT * FROM agreements WHERE id = ?').get(proposal.parent_agreement_id);
@@ -953,10 +1411,10 @@ app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
     }
 
     if (actorDid !== proposal.client_did && actorDid !== proposal.freelancer_did) {
-      return res.status(403).json({ error: 'Only the named counterparty can co-sign this amendment' });
+      return res.status(403).json({ error: 'Only the counterparty on this agreement can co-sign' });
     }
 
-    const { signature } = await resolveSignature({
+    const { signature, identityRow } = await resolveSignature({
       actorDid,
       digestHex: proposal.signing_digest,
       providedSignature,
@@ -969,7 +1427,6 @@ app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
       return res.status(400).json({ error: 'Both Gig Provider and Freelancer signatures are required!' });
     }
 
-    // Execute atomic dual-signature amendment on Solidity EVM contract!
     const receipt = await chain.sendTx(
       'amendAgreement',
       [
@@ -982,18 +1439,17 @@ app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
       ],
       {
         actorAddress: actorDid === proposal.client_did ? proposal.client_address : proposal.freelancer_address,
-        summary: `Mutual Amendment Anchored (v${parent.version} -> v${proposal.version}): ${proposal.title}`,
+        summary: `Mutual Agreement Modification Anchored (v${parent.version} -> v${proposal.version}): ${proposal.title}`,
         referenceId: proposal.id,
       }
     );
 
     const nowIso = new Date().toISOString();
 
-    db.prepare(`
-      UPDATE agreements
-      SET status = 'SUPERSEDED', superseded_by_id = ?
-      WHERE id = ?
-    `).run(proposal.id, parent.id);
+    db.prepare("UPDATE agreements SET status = 'SUPERSEDED', superseded_by_id = ? WHERE id = ?").run(
+      proposal.id,
+      parent.id
+    );
 
     db.prepare(`
       UPDATE agreements
@@ -1019,7 +1475,7 @@ app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
       proposal.id
     );
 
-    // Carry forward existing milestone progress from parent and append any newly added milestones
+    // Carry forward milestone progress to the new agreement version
     const prevMilestones = db
       .prepare('SELECT * FROM milestones WHERE agreement_id = ? ORDER BY idx ASC')
       .all(parent.id);
@@ -1063,7 +1519,6 @@ app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
           prev.block_number
         );
       } else if (prev && prev.status === 'EVIDENCE_SUBMITTED') {
-        // Re-bind pending evidence to the newly active amended agreement ID so sign-off anchors cleanly
         const reDigest = computeMilestoneDigest({
           milestoneId: newMId,
           agreementId: proposal.id,
@@ -1118,6 +1573,17 @@ app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
       }
     }
 
+    db.prepare(`
+      INSERT INTO messages (id, thread_id, sender_did, body, message_type, created_at)
+      VALUES (?, ?, ?, ?, 'SYSTEM', ?)
+    `).run(
+      `msg-${crypto.randomBytes(5).toString('hex')}`,
+      proposal.root_agreement_id,
+      actorDid,
+      `${identityRow.name} co-signed the modification! New Digital Agreement v${proposal.version} (${proposal.currency} ${proposal.total_cost.toLocaleString()}) is now active on-chain at Block #${receipt.blockNumber}; v${parent.version} is archived as Superseded.`,
+      nowIso
+    );
+
     res.json({
       ok: true,
       supersededAgreementId: parent.id,
@@ -1130,9 +1596,6 @@ app.post('/api/agreements/:id/cosign-amendment', async (req, res) => {
   }
 });
 
-/**
- * Counterparty rejects a pending draft or pending amendment (leaving active agreement untouched!)
- */
 app.post('/api/agreements/:id/reject', (req, res) => {
   try {
     const { id } = req.params;
@@ -1140,7 +1603,7 @@ app.post('/api/agreements/:id/reject', (req, res) => {
     const ag = db.prepare('SELECT * FROM agreements WHERE id = ?').get(id);
     if (!ag) return res.status(404).json({ error: 'Agreement not found' });
     if (ag.status !== 'PENDING_SIGNATURES' && ag.status !== 'AMENDMENT_PENDING') {
-      return res.status(400).json({ error: 'Only pending proposals can be rejected' });
+      return res.status(400).json({ error: 'Only pending proposals can be declined' });
     }
     if (actorDid !== ag.client_did && actorDid !== ag.freelancer_did) {
       return res.status(403).json({ error: 'Unauthorized actor' });
@@ -1155,11 +1618,6 @@ app.post('/api/agreements/:id/reject', (req, res) => {
   }
 });
 
-/**
- * Interactive Unilateral Tamper Attack Simulator:
- * Demonstrates what happens if ONE party (or a rogue DB attacker) alters cost, deadline, or features
- * without the counterparty's cryptographic co-signature.
- */
 app.post('/api/agreements/:id/simulate-tamper', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1167,7 +1625,7 @@ app.post('/api/agreements/:id/simulate-tamper', async (req, res) => {
 
     const ag = db.prepare('SELECT * FROM agreements WHERE id = ?').get(id);
     if (!ag || !ag.tx_hash) {
-      return res.status(400).json({ error: 'Select an on-chain anchored agreement to test tamper protection' });
+      return res.status(400).json({ error: 'Select a blockchain-anchored agreement to test tamper protection' });
     }
 
     const originalPayload = JSON.parse(ag.canonical_payload_json);
@@ -1184,11 +1642,8 @@ app.post('/api/agreements/:id/simulate-tamper', async (req, res) => {
     }
 
     const { hash: mutatedTermsHash } = keccak256Json(mutatedPayload);
-
-    // 1. Check against On-Chain Registry via auditAgreement view call
     const auditRes = await chain.callView('auditAgreement', [ag.id, mutatedTermsHash]);
 
-    // 2. Attempt to force an unilateral amendment on the EVM contract with ONLY the attacker's signature!
     const fakeAmendmentId = ethers.keccak256(ethers.toUtf8Bytes(`tamper:${ag.id}:${Date.now()}`));
     const amendDigest = computeAmendmentDigest({
       newAgreementId: fakeAmendmentId,
@@ -1205,7 +1660,6 @@ app.post('/api/agreements/:id/simulate-tamper', async (req, res) => {
       attackerSig = await signDigestWithKey(attackerRow.demo_private_key, amendDigest);
     }
 
-    // Counterparty refuses to sign, so attacker reuses counterparty's old v1 signature or passes attackerSig
     const forgedClientSig = attackerRow?.did === ag.client_did ? attackerSig : ag.client_signature;
     const forgedFreelancerSig = attackerRow?.did === ag.freelancer_did ? attackerSig : ag.freelancer_signature;
 
@@ -1235,13 +1689,7 @@ app.post('/api/agreements/:id/simulate-tamper', async (req, res) => {
       onChainHashMatches: Boolean(auditRes.hashMatches),
       evmContractResponse: evmRejectionError,
       explanation:
-        'Unilateral modification blocked at two independent cryptographic layers: (1) Modifying even 1 byte changed the Keccak-256 hash so it no longer matches the immutable on-chain anchor, and (2) TrustWorkProtocol.amendAgreement() reverted via ecrecover because the counterparty never signed the altered termsHash.',
-      comparison: {
-        originalCost: originalPayload.compensation.totalCost,
-        tamperedCost: mutatedPayload.compensation.totalCost,
-        originalDeadline: originalPayload.timeline.deadline,
-        tamperedDeadline: mutatedPayload.timeline.deadline,
-      },
+        'Unilateral tampering failed: (1) Altering time, cost, or features changed the Keccak-256 fingerprint so it mismatches the on-chain hash, and (2) the Smart Contract rejected the update because the other party never signed the altered terms.',
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1249,7 +1697,7 @@ app.post('/api/agreements/:id/simulate-tamper', async (req, res) => {
 });
 
 // ============================================================================
-// 3. MILESTONE EVIDENCE SUBMISSION & CLIENT SIGN-OFF
+// MILESTONES & DELIVERABLE PROOFS
 // ============================================================================
 app.post('/api/milestones/:id/submit-evidence', async (req, res) => {
   try {
@@ -1269,10 +1717,10 @@ app.post('/api/milestones/:id/submit-evidence', async (req, res) => {
 
     const ag = db.prepare('SELECT * FROM agreements WHERE id = ?').get(ms.agreement_id);
     if (!ag || ag.status !== 'ACTIVE') {
-      return res.status(400).json({ error: 'Parent agreement must be ACTIVE to submit milestone evidence' });
+      return res.status(400).json({ error: 'Contract must be ACTIVE to submit milestone deliverables' });
     }
     if (actorDid !== ag.freelancer_did) {
-      return res.status(403).json({ error: 'Only the assigned Freelancer can submit deliverable evidence' });
+      return res.status(403).json({ error: 'Only the hired Freelancer on this contract can submit deliverables' });
     }
 
     const evidenceBundle = {
@@ -1301,7 +1749,7 @@ app.post('/api/milestones/:id/submit-evidence', async (req, res) => {
       deliverableHash,
     });
 
-    const { signature } = await resolveSignature({
+    const { signature, identityRow } = await resolveSignature({
       actorDid,
       digestHex: signingDigest,
       providedSignature,
@@ -1336,6 +1784,17 @@ app.post('/api/milestones/:id/submit-evidence', async (req, res) => {
       ms.id
     );
 
+    db.prepare(`
+      INSERT INTO messages (id, thread_id, sender_did, body, message_type, created_at)
+      VALUES (?, ?, ?, ?, 'SYSTEM', ?)
+    `).run(
+      `msg-${crypto.randomBytes(5).toString('hex')}`,
+      ag.root_agreement_id,
+      actorDid,
+      `${identityRow.name} submitted deliverable proof for ${ms.title} (Commit ${evidenceBundle.commitHash.slice(0, 10)}).`,
+      nowIso
+    );
+
     res.json({
       ok: true,
       milestoneId: ms.id,
@@ -1357,15 +1816,15 @@ app.post('/api/milestones/:id/sign-off', async (req, res) => {
     const ms = db.prepare('SELECT * FROM milestones WHERE id = ?').get(id);
     if (!ms) return res.status(404).json({ error: 'Milestone not found' });
     if (ms.status !== 'EVIDENCE_SUBMITTED') {
-      return res.status(400).json({ error: 'Milestone must have submitted evidence before sign-off' });
+      return res.status(400).json({ error: 'Milestone must have submitted deliverables first' });
     }
 
     const ag = db.prepare('SELECT * FROM agreements WHERE id = ?').get(ms.agreement_id);
     if (!ag || ag.status !== 'ACTIVE') {
-      return res.status(400).json({ error: 'Parent agreement must be ACTIVE' });
+      return res.status(400).json({ error: 'Contract must be ACTIVE' });
     }
     if (actorDid !== ag.client_did) {
-      return res.status(403).json({ error: 'Only the Gig Provider (Client) can sign off milestone deliverables' });
+      return res.status(403).json({ error: 'Only the Gig Provider on this contract can approve & sign off deliverables' });
     }
 
     const { signature: clientSignature } = await resolveSignature({
@@ -1386,7 +1845,7 @@ app.post('/api/milestones/:id/sign-off', async (req, res) => {
       ],
       {
         actorAddress: ag.client_address,
-        summary: `Client Signed Off Milestone #${ms.idx}: ${ms.title}`,
+        summary: `Approved & Anchored Milestone #${ms.idx}: ${ms.title}`,
         referenceId: ms.id,
       }
     );
@@ -1402,7 +1861,6 @@ app.post('/api/milestones/:id/sign-off', async (req, res) => {
       WHERE id = ?
     `).run(clientSignature, nowIso, receipt.txHash, receipt.blockNumber, ms.id);
 
-    // Check if all milestones on this agreement are now VERIFIED_ONCHAIN
     const remaining = db
       .prepare("SELECT COUNT(*) as cnt FROM milestones WHERE agreement_id = ? AND status != 'VERIFIED_ONCHAIN'")
       .get(ag.id);
@@ -1418,10 +1876,13 @@ app.post('/api/milestones/:id/sign-off', async (req, res) => {
         const compSig = await signDigestWithKey(clientRow.demo_private_key, compDigest);
         await chain.sendTx('completeAgreement', [ag.id, compSig], {
           actorAddress: ag.client_address,
-          summary: `All Milestones Verified -> Completed Agreement: ${ag.title}`,
+          summary: `Completed Contract on Blockchain: ${ag.title}`,
           referenceId: ag.id,
         });
         db.prepare("UPDATE agreements SET status = 'COMPLETED' WHERE id = ?").run(ag.id);
+        if (ag.gig_id) {
+          db.prepare("UPDATE gigs SET status = 'COMPLETED' WHERE id = ?").run(ag.gig_id);
+        }
         agreementCompleted = true;
       }
     }
@@ -1433,7 +1894,7 @@ app.post('/api/milestones/:id/sign-off', async (req, res) => {
 });
 
 // ============================================================================
-// 4. W3C VERIFIABLE CREDENTIALS & ON-CHAIN REVOCATION REGISTRY
+// W3C VERIFIABLE CREDENTIALS & REVOCATION REGISTRY
 // ============================================================================
 app.post('/api/credentials/issue', async (req, res) => {
   try {
@@ -1448,12 +1909,12 @@ app.post('/api/credentials/issue', async (req, res) => {
     } = req.body;
 
     const ag = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreementId);
-    if (!ag) return res.status(404).json({ error: 'Agreement not found' });
+    if (!ag) return res.status(404).json({ error: 'Contract not found' });
     if (ag.status !== 'ACTIVE' && ag.status !== 'COMPLETED') {
-      return res.status(400).json({ error: 'Credentials can only be issued for ACTIVE or COMPLETED agreements' });
+      return res.status(400).json({ error: 'Credentials can only be issued for active or completed contracts' });
     }
     if (issuerDid !== ag.client_did) {
-      return res.status(403).json({ error: 'Only the Agreement Gig Provider can issue its completion credential' });
+      return res.status(403).json({ error: 'Only the Gig Provider on this contract can issue its credential' });
     }
 
     const issuer = db.prepare('SELECT * FROM identities WHERE did = ?').get(ag.client_did);
@@ -1463,9 +1924,7 @@ app.post('/api/credentials/issue', async (req, res) => {
       .all(ag.id);
 
     const deliverableHashes = verifiedMs.map((m) => m.deliverable_hash).filter(Boolean);
-    const credentialId = ethers.keccak256(
-      ethers.toUtf8Bytes(`vc:${ag.id}:${Date.now()}`)
-    );
+    const credentialId = ethers.keccak256(ethers.toUtf8Bytes(`vc:${ag.id}:${Date.now()}`));
     const issuedAtIso = new Date().toISOString();
 
     const vcUnsigned = {
@@ -1487,7 +1946,7 @@ app.post('/api/credentials/issue', async (req, res) => {
         id: subject.did,
         name: subject.name,
         projectTitle: ag.title,
-        rolePerformed: String(rolePerformed || 'Lead Specialist').trim(),
+        rolePerformed: String(rolePerformed || 'Lead Freelance Specialist').trim(),
         statement: String(
           summaryStatement || `${subject.name} successfully delivered ${ag.title}.`
         ).trim(),
@@ -1538,7 +1997,7 @@ app.post('/api/credentials/issue', async (req, res) => {
       [credentialId, vcHash, ag.id, issuer.address, subject.address, ipfsCid, issuerSig],
       {
         actorAddress: issuer.address,
-        summary: `Issued W3C Verifiable Credential: ${issuer.name} -> ${subject.name} (${ag.title})`,
+        summary: `Issued Verified Work Credential: ${issuer.name} -> ${subject.name}`,
         referenceId: credentialId,
       }
     );
@@ -1590,9 +2049,9 @@ app.post('/api/credentials/:id/revoke', async (req, res) => {
 
     const cred = db.prepare('SELECT * FROM verifiable_credentials WHERE id = ?').get(id);
     if (!cred) return res.status(404).json({ error: 'Credential not found' });
-    if (cred.revoked) return res.status(400).json({ error: 'Credential is already revoked on-chain' });
+    if (cred.revoked) return res.status(400).json({ error: 'Credential is already revoked' });
     if (actorDid !== cred.issuer_did) {
-      return res.status(403).json({ error: 'Only the original credential Issuer can revoke it on-chain' });
+      return res.status(403).json({ error: 'Only the original Gig Provider who issued this credential can revoke it' });
     }
 
     const digest = computeRevokeCredentialDigest({
@@ -1612,7 +2071,7 @@ app.post('/api/credentials/:id/revoke', async (req, res) => {
       [cred.id, String(reason).trim(), signature],
       {
         actorAddress: cred.issuer_address,
-        summary: `Revoked Credential on-chain: ${cred.id.slice(0, 14)}... (${reason})`,
+        summary: `Revoked Credential on-chain (${reason})`,
         referenceId: cred.id,
       }
     );
@@ -1631,7 +2090,7 @@ app.post('/api/credentials/:id/revoke', async (req, res) => {
 });
 
 // ============================================================================
-// 5. 1-SECOND INDEPENDENT CRYPTOGRAPHIC AUDIT VERIFIER (Slide 04, 07, 09)
+// 1-SECOND INDEPENDENT BLOCKCHAIN AUDIT VERIFIER
 // ============================================================================
 app.post('/api/verify', async (req, res) => {
   const started = performance.now();
@@ -1649,13 +2108,13 @@ app.post('/api/verify', async (req, res) => {
         credId = parsedDoc.id.replace('urn:trustwork:vc:', '');
       }
       if (!credId || !credId.startsWith('0x') || credId.length !== 66) {
-        return res.status(400).json({ error: 'Provide a valid 32-byte Credential ID or W3C VC JSON document' });
+        return res.status(400).json({ error: 'Provide a valid 32-byte Credential ID or W3C VC JSON' });
       }
 
       const dbCred = db.prepare('SELECT * FROM verifiable_credentials WHERE id = ?').get(credId);
       const docToHash = parsedDoc || (dbCred ? JSON.parse(dbCred.vc_json) : null);
       if (!docToHash) {
-        return res.status(404).json({ error: 'Credential payload not found; paste the VC JSON to verify.' });
+        return res.status(404).json({ error: 'Credential document not found' });
       }
 
       const { proof, ...unsignedPart } = docToHash;
@@ -1669,7 +2128,6 @@ app.post('/api/verify', async (req, res) => {
       const onChainSubject = onChain.subject;
       const issuerTierName = ISSUER_TIER_NAMES[Number(onChain.issuerTier)] || 'INDIVIDUAL';
 
-      // Verify ECDSA signature directly
       let signatureValid = false;
       let recoveredSigner = null;
       if (proof?.jwsSignature && exists) {
@@ -1721,7 +2179,6 @@ app.post('/api/verify', async (req, res) => {
       });
     }
 
-    // Agreement 1-second audit
     let parsedAg = null;
     if (documentJson) {
       parsedAg = typeof documentJson === 'string' ? JSON.parse(documentJson) : documentJson;
@@ -1806,7 +2263,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 // ============================================================================
-// 6. ZERO-KNOWLEDGE SELECTIVE DISCLOSURE PROOFS & IPFS VAULT INSPECTOR
+// PRIVACY ZKP CLAIMS & IPFS CONTENT INSPECTOR
 // ============================================================================
 app.post('/api/zkp/generate', (req, res) => {
   try {
@@ -1816,7 +2273,7 @@ app.post('/api/zkp/generate', (req, res) => {
       .all(subjectDid);
 
     if (creds.length === 0) {
-      return res.status(400).json({ error: 'Freelancer needs at least 1 active on-chain credential' });
+      return res.status(400).json({ error: 'Complete at least 1 verified contract credential first' });
     }
 
     const actualValue =
@@ -1836,8 +2293,8 @@ app.post('/api/zkp/generate', (req, res) => {
     const displayTitle =
       title ||
       (claimType === 'MIN_EARNINGS_INR'
-        ? `Verified Contract Earnings ≥ ₹${Number(threshold).toLocaleString('en-IN')} (Client Identities Redacted)`
-        : `Completed ≥ ${threshold} Cryptographically Verified Projects`);
+        ? `Verified ₹${Number(threshold).toLocaleString('en-IN')}+ Contract Revenue (Private Client Names Hidden)`
+        : `Completed ${threshold}+ Blockchain-Verified Contracts`);
 
     db.prepare(`
       INSERT INTO zkp_proofs (id, subject_did, title, claim_type, threshold, proof_json, public_commitment, created_at)
@@ -1872,19 +2329,15 @@ app.post('/api/zkp/verify', (req, res) => {
 
 app.get('/api/ipfs/:cid', (req, res) => {
   const envelope = getFromIpfsVault(req.params.cid);
-  if (!envelope) return res.status(404).json({ error: 'CID not found in local IPFS vault' });
+  if (!envelope) return res.status(404).json({ error: 'CID not found in IPFS vault' });
   res.json(envelope);
 });
 
 app.post('/rpc', async (req, res) => {
   await chain.init();
   const { id = 1, method } = req.body || {};
-  if (method === 'eth_chainId') {
-    return res.json({ jsonrpc: '2.0', id, result: '0x7a69' });
-  }
-  if (method === 'net_version') {
-    return res.json({ jsonrpc: '2.0', id, result: '31337' });
-  }
+  if (method === 'eth_chainId') return res.json({ jsonrpc: '2.0', id, result: '0x7a69' });
+  if (method === 'net_version') return res.json({ jsonrpc: '2.0', id, result: '31337' });
   if (method === 'eth_blockNumber') {
     return res.json({ jsonrpc: '2.0', id, result: '0x' + chain.blockNumber.toString(16) });
   }
@@ -1905,7 +2358,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   seedIfEmpty()
     .then(() => {
       app.listen(PORT, '127.0.0.1', () => {
-        console.log(`[trustwork] Server + Embedded EVM running on http://127.0.0.1:${PORT}`);
+        console.log(`[trustwork] Freelance Platform + Blockchain Engine running on http://127.0.0.1:${PORT}`);
       });
     })
     .catch((err) => {

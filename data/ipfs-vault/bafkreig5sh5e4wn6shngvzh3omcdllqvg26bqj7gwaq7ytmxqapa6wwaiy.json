@@ -1,0 +1,16 @@
+{
+  "cid": "bafkreig5sh5e4wn6shngvzh3omcdllqvg26bqj7gwaq7ytmxqapa6wwaiy",
+  "pinnedAt": "2026-11-25T14:17:36.566Z",
+  "sizeBytes": 469,
+  "metadata": {
+    "type": "MILESTONE_EVIDENCE"
+  },
+  "content": {
+    "milestoneId": "0x534df53ab17c2bfac10aeae7fbea451ddd48c5d8319955fe1ef871b99073c012",
+    "agreementId": "0xed4d3e6f4cc2cc76492524d2568e9abc3a77de09c4e18b718103d0c868ad83d3",
+    "title": "Milestone 1: Encrypted PII Vault & Tokenizer",
+    "commitHash": "88b12f904e31a76d92c1108fa4b7712e9031ca55",
+    "repoUrl": "https://github.com/novafin/kyc-vault/commit/88b12f904e31a76d92c1108fa4b7712e9031ca55",
+    "notes": "Completed AES-256-GCM PII vault crate + integration tests."
+  }
+}

@@ -20,22 +20,71 @@ db.exec(`
     name TEXT NOT NULL,
     headline TEXT NOT NULL DEFAULT '',
     email TEXT DEFAULT '',
+    password_hash TEXT DEFAULT '',
     bio TEXT DEFAULT '',
-    role TEXT NOT NULL DEFAULT 'FREELANCER',
+    role TEXT NOT NULL DEFAULT 'BOTH',
+    hourly_rate REAL NOT NULL DEFAULT 2500,
+    location TEXT NOT NULL DEFAULT 'Bengaluru, India',
     organization TEXT DEFAULT '',
     domain TEXT DEFAULT '',
     issuer_tier TEXT NOT NULL DEFAULT 'INDIVIDUAL',
     kyb_verified INTEGER NOT NULL DEFAULT 0,
     skills_json TEXT NOT NULL DEFAULT '[]',
-    avatar_color TEXT NOT NULL DEFAULT '#0284C7',
+    avatar_color TEXT NOT NULL DEFAULT '#4F46E5',
     demo_private_key TEXT DEFAULT NULL,
     tx_hash TEXT DEFAULT NULL,
     block_number INTEGER DEFAULT NULL,
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS gigs (
+    id TEXT PRIMARY KEY,
+    poster_did TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'Full-Stack Development',
+    budget_min REAL NOT NULL,
+    budget_max REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'INR',
+    duration_days INTEGER NOT NULL DEFAULT 30,
+    deadline TEXT NOT NULL,
+    experience_level TEXT NOT NULL DEFAULT 'Senior',
+    skills_json TEXT NOT NULL DEFAULT '[]',
+    features_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'OPEN',
+    hired_freelancer_did TEXT DEFAULT NULL,
+    root_agreement_id TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS proposals (
+    id TEXT PRIMARY KEY,
+    gig_id TEXT NOT NULL,
+    freelancer_did TEXT NOT NULL,
+    cover_letter TEXT NOT NULL,
+    proposed_cost REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'INR',
+    proposed_duration_days INTEGER NOT NULL,
+    proposed_deadline TEXT NOT NULL,
+    proposed_features_json TEXT NOT NULL DEFAULT '[]',
+    proposed_milestones_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    agreement_id TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    sender_did TEXT NOT NULL,
+    body TEXT NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'TEXT',
+    created_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS agreements (
     id TEXT PRIMARY KEY,
+    gig_id TEXT DEFAULT NULL,
     root_agreement_id TEXT NOT NULL,
     parent_agreement_id TEXT DEFAULT NULL,
     superseded_by_id TEXT DEFAULT NULL,
@@ -119,7 +168,7 @@ db.exec(`
     vc_json TEXT NOT NULL,
     vc_hash TEXT NOT NULL,
     ipfs_cid TEXT NOT NULL,
-    signing_digest TEXT NOT NULL,
+    signing_digest TEXT DEFAULT NULL,
     issuer_signature TEXT NOT NULL,
     revoked INTEGER NOT NULL DEFAULT 0,
     revocation_reason TEXT DEFAULT '',

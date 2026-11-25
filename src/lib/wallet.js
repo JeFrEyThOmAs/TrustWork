@@ -6,14 +6,19 @@ export function shortHex(val, start = 8, end = 6) {
   return `${val.slice(0, start)}...${val.slice(-end)}`;
 }
 
+export function initials(name = '') {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join('');
+}
+
 export function formatCurrency(amount, currency = 'INR') {
   const num = Number(amount || 0);
-  if (currency === 'INR') {
-    return `₹${num.toLocaleString('en-IN')}`;
-  }
-  if (currency === 'USD') {
-    return `$${num.toLocaleString('en-US')}`;
-  }
+  if (currency === 'INR') return `₹${num.toLocaleString('en-IN')}`;
+  if (currency === 'USD') return `$${num.toLocaleString('en-US')}`;
   return `${num} ${currency}`;
 }
 
@@ -21,53 +26,72 @@ export function tierMeta(tier) {
   switch (tier) {
     case 'ENTERPRISE':
       return {
-        label: 'ENTERPRISE VERIFIED',
-        bg: 'bg-sky-100 text-sky-900 border-sky-800',
-        dot: 'bg-sky-600',
+        label: 'Enterprise Verified',
+        badge: 'bg-sky-50 text-sky-700 border-sky-200',
       };
     case 'VERIFIED_ORG':
       return {
-        label: 'VERIFIED ORG',
-        bg: 'bg-amber-100 text-amber-900 border-amber-800',
-        dot: 'bg-amber-500',
+        label: 'Verified Company',
+        badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
       };
     case 'PLATFORM':
       return {
-        label: 'TRUSTED PLATFORM',
-        bg: 'bg-purple-100 text-purple-900 border-purple-800',
-        dot: 'bg-purple-600',
+        label: 'Partner Platform',
+        badge: 'bg-purple-50 text-purple-700 border-purple-200',
       };
     default:
       return {
-        label: 'SELF-SOVEREIGN ID',
-        bg: 'bg-slate-100 text-slate-800 border-slate-700',
-        dot: 'bg-slate-500',
+        label: 'Verified Individual',
+        badge: 'bg-slate-100 text-slate-700 border-slate-200',
       };
   }
 }
 
-export function statusBadge(status) {
+export function agreementStatusMeta(status) {
   switch (status) {
     case 'ACTIVE':
-      return 'bg-emerald-100 text-emerald-900 border-emerald-800';
+      return {
+        label: 'Active On-Chain',
+        cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      };
     case 'COMPLETED':
-      return 'bg-sky-100 text-sky-950 border-sky-900';
+      return {
+        label: 'Completed',
+        cls: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+      };
     case 'PENDING_SIGNATURES':
-      return 'bg-amber-100 text-amber-950 border-amber-900';
+      return {
+        label: 'Awaiting Co-Signature',
+        cls: 'bg-amber-50 text-amber-800 border-amber-200',
+      };
     case 'AMENDMENT_PENDING':
-      return 'bg-rose-100 text-rose-950 border-rose-900';
+      return {
+        label: 'Change Request Pending',
+        cls: 'bg-rose-50 text-rose-700 border-rose-200',
+      };
     case 'SUPERSEDED':
-      return 'bg-slate-200 text-slate-700 border-slate-600';
+      return {
+        label: 'Superseded Version',
+        cls: 'bg-slate-100 text-slate-600 border-slate-200',
+      };
     case 'REJECTED':
-      return 'bg-red-100 text-red-900 border-red-800';
+      return {
+        label: 'Declined',
+        cls: 'bg-red-50 text-red-700 border-red-200',
+      };
     default:
-      return 'bg-gray-100 text-gray-800 border-gray-700';
+      return {
+        label: status,
+        cls: 'bg-slate-100 text-slate-700 border-slate-200',
+      };
   }
 }
 
 export async function connectBrowserWallet() {
   if (typeof window === 'undefined' || !window.ethereum) {
-    throw new Error('MetaMask / EIP-1193 browser wallet not detected. You can also generate a built-in Self-Controlled DID Keypair!');
+    throw new Error(
+      'MetaMask browser extension not detected. Leave wallet blank to generate an automatic blockchain keypair!'
+    );
   }
   const provider = new ethers.BrowserProvider(window.ethereum);
   await provider.send('eth_requestAccounts', []);
@@ -80,7 +104,7 @@ export async function signDigestWithBrowserWallet(expectedAddress, digestHex) {
   const { address, signer } = await connectBrowserWallet();
   if (ethers.getAddress(address) !== ethers.getAddress(expectedAddress)) {
     throw new Error(
-      `Active MetaMask account (${shortHex(address)}) does not match DID controller (${shortHex(expectedAddress)})`
+      `Connected wallet (${shortHex(address)}) does not match your account DID (${shortHex(expectedAddress)})`
     );
   }
   return signer.signMessage(ethers.getBytes(digestHex));

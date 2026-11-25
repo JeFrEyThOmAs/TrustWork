@@ -1,0 +1,16 @@
+{
+  "cid": "bafkreidptty7hypqedygg3v25rvyytujyq6626dl6qfrc63wmfphzjspq4",
+  "pinnedAt": "2026-11-25T14:17:36.498Z",
+  "sizeBytes": 521,
+  "metadata": {
+    "type": "MILESTONE_EVIDENCE"
+  },
+  "content": {
+    "milestoneId": "0xce1797235741966840ac9e614d26dd9a303015a37d913bb61aca9429785381ea",
+    "agreementId": "0x7ad057b7c69632e106504f18e0a80a1fdb15556464beaccfba126475b270734c",
+    "title": "Milestone 1: Double-Entry Ledger & Settlement API",
+    "commitHash": "a94f82e17c09b31f6d22e8a45c71b09f331289c4",
+    "repoUrl": "https://github.com/acmecorp-eng/project-apex/commit/a94f82e17c09b31f6d22e8a45c71b09f331289c4",
+    "notes": "Delivered Milestone 1: Double-Entry Ledger & Settlement API with 98.4% integration test coverage."
+  }
+}

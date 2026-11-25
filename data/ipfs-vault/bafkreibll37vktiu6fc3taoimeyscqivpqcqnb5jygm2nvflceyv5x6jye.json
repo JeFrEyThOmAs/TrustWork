@@ -1,0 +1,16 @@
+{
+  "cid": "bafkreibll37vktiu6fc3taoimeyscqivpqcqnb5jygm2nvflceyv5x6jye",
+  "pinnedAt": "2026-11-25T14:17:36.517Z",
+  "sizeBytes": 525,
+  "metadata": {
+    "type": "MILESTONE_EVIDENCE"
+  },
+  "content": {
+    "milestoneId": "0x560aab1a046534add1ee94db5e22b5c19ad4f96d082f39b594ffc8f1d6a4b7bf",
+    "agreementId": "0x7ad057b7c69632e106504f18e0a80a1fdb15556464beaccfba126475b270734c",
+    "title": "Milestone 3: Multi-Currency FX & UPI Reconciliation",
+    "commitHash": "f03d98a41e76c209b5512d78e3401ab9821ce610",
+    "repoUrl": "https://github.com/acmecorp-eng/project-apex/commit/f03d98a41e76c209b5512d78e3401ab9821ce610",
+    "notes": "Delivered Milestone 3: Multi-Currency FX & UPI Reconciliation with 98.4% integration test coverage."
+  }
+}
