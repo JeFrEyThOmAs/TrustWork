@@ -1,0 +1,59 @@
+{
+  "cid": "bafkreihx7smzj23dj23jdrvtouno27xxscdbx6stsflwwyb3ji7e3nwfw4",
+  "pinnedAt": "2026-11-25T13:22:10.690Z",
+  "sizeBytes": 2155,
+  "metadata": {
+    "type": "W3C_VERIFIABLE_CREDENTIAL"
+  },
+  "content": {
+    "@context": [
+      "https://www.w3.org/2018/credentials/v1",
+      "https://trustwork.protocol/credentials/v2"
+    ],
+    "id": "urn:trustwork:vc:0x75e91b7434aa16c9bd5ac8e7717b84ee900b5a274468612b62903df0836be9f1",
+    "type": [
+      "VerifiableCredential",
+      "TrustWorkProfessionalCredential"
+    ],
+    "issuer": {
+      "id": "did:trustwork:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "name": "Acme Corp",
+      "organization": "Acme Corporation Pvt. Ltd.",
+      "tier": "ENTERPRISE",
+      "domain": "acmecorp.io"
+    },
+    "issuanceDate": "2026-11-24T19:43:50.000Z",
+    "credentialSubject": {
+      "id": "did:trustwork:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "name": "Mili Nair",
+      "projectTitle": "Project Apex — Core Backend Payments & Multi-Currency Settlement Engine",
+      "rolePerformed": "Lead Backend & Distributed Payments Architect",
+      "statement": "Mili completed the backend payments engine for Project Apex.",
+      "skillsVerified": [
+        "Go",
+        "Distributed Systems",
+        "Payment Engines",
+        "PostgreSQL",
+        "UPI Reconciliation"
+      ],
+      "agreementId": "0x7ad057b7c69632e106504f18e0a80a1fdb15556464beaccfba126475b270734c",
+      "agreementVersion": 2,
+      "agreementTermsHash": "0x978bc1cd33466ca3b9b4c91cf24964e07fc375c245accb0cda54009e509bdbbb",
+      "deliverableHashes": [
+        "0xbd7639921f37d5dc498eec7d43acc1fc8edc927b73461c97d8698df1726ff530",
+        "0x99a4f37b361e1b23d10dcd457d781b013dd4171ae6a3688b5004fdb5361f8c6a",
+        "0xaba3720c4f5feeed3de222280633255f4afd01bdaafa24bd8370903b70c2812c"
+      ],
+      "rating": 5
+    },
+    "proof": {
+      "type": "EcdsaSecp256k1RecoverySignature2020",
+      "created": "2026-11-24T19:43:50.000Z",
+      "proofPurpose": "assertionMethod",
+      "verificationMethod": "did:trustwork:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC#controller",
+      "vcPayloadKeccak256": "0x1268880c61f2cbc998ca261a7d36af19ac4a71c46b961797e6353a361bf9202b",
+      "onChainDigest": "0xd6ea6a6edcc43d7afbaa8dcd3e80381567172610d8918346fc6eaa20d2bcd0de",
+      "jwsSignature": "0xb5ba793a617db85a7b0c5cc409a24dc39116a62fe2fc94702799539c681431f001fbd8e045039ef1b222c0f3b444ce0ee9e25fdabe81e600d3d2ae6bc18e05721c"
+    }
+  }
+}

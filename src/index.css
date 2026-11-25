@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --tw-cream: #faf7f0;
+    --tw-ink: #111827;
+    --tw-crimson: #e11d48;
+    --tw-cobalt: #0284c7;
+    --tw-amber: #f59e0b;
+    --tw-emerald: #059669;
+  }
+
+  body {
+    font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #faf7f0;
+    color: #111827;
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+}
+
+.brutal-card {
+  background-color: #ffffff;
+  border: 2px solid #111827;
+  box-shadow: 4px 4px 0px #111827;
+}
+
+.brutal-card-sm {
+  background-color: #ffffff;
+  border: 2px solid #111827;
+  box-shadow: 3px 3px 0px #111827;
+}
+
+.brutal-dark {
+  background-color: #0f172a;
+  color: #f8fafc;
+  border: 2px solid #111827;
+  box-shadow: 4px 4px 0px #e11d48;
+}
+
+.brutal-btn {
+  border: 2px solid #111827;
+  box-shadow: 3px 3px 0px #111827;
+  font-weight: 700;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  cursor: pointer;
+}
+
+.brutal-btn:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px #111827;
+}
+
+.brutal-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px #111827;
+}
+
+.brutal-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.brutal-input {
+  background-color: #ffffff;
+  border: 2px solid #111827;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  outline: none;
+  transition: box-shadow 0.12s ease;
+}
+
+.brutal-input:focus {
+  box-shadow: 3px 3px 0px #0284c7;
+}

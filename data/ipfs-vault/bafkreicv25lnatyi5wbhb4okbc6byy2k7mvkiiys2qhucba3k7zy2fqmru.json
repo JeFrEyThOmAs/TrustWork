@@ -1,0 +1,67 @@
+{
+  "cid": "bafkreicv25lnatyi5wbhb4okbc6byy2k7mvkiiys2qhucba3k7zy2fqmru",
+  "pinnedAt": "2026-11-25T13:24:21.681Z",
+  "sizeBytes": 2213,
+  "metadata": {
+    "type": "DIGITAL_AGREEMENT",
+    "version": 1
+  },
+  "content": {
+    "schema": "trustwork.digital-agreement.v2",
+    "version": 1,
+    "parentAgreementId": null,
+    "title": "Project Apex — Core Backend Payments Engine",
+    "summary": "Design and build a fault-tolerant ledger & ISO-20022 payment settlement engine for Acme Corp.",
+    "category": "Distributed FinTech Systems",
+    "parties": {
+      "gigProviderDid": "did:trustwork:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "freelancerDid": "did:trustwork:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    },
+    "timeline": {
+      "startDate": "2026-09-01",
+      "deadline": "2026-10-15",
+      "durationDays": 45
+    },
+    "compensation": {
+      "totalCost": 850000,
+      "currency": "INR",
+      "paymentSchedule": "Milestone-Based (50% / 50%)"
+    },
+    "features": [
+      {
+        "index": 1,
+        "name": "Idempotent Double-Entry Ledger Core",
+        "description": "ACID-compliant payment state machine handling 5,000 TPS with zero duplicate settlements.",
+        "acceptanceCriteria": "100% pass on chaos fault-injection benchmark"
+      },
+      {
+        "index": 2,
+        "name": "Cryptographic Webhook Dispatcher",
+        "description": "HMAC-SHA256 signed merchant payout notifications with exponential retry queues.",
+        "acceptanceCriteria": "P99 latency under 85ms"
+      }
+    ],
+    "milestones": [
+      {
+        "index": 1,
+        "title": "Milestone 1: Double-Entry Ledger & Settlement API",
+        "deliverables": "Go ledger service, PostgreSQL schema migrations, load test suite",
+        "dueDate": "2026-09-22",
+        "amount": 425000
+      },
+      {
+        "index": 2,
+        "title": "Milestone 2: Webhook Dispatcher & Production Cutover",
+        "deliverables": "Signed webhook worker, Prometheus telemetry, runbook documentation",
+        "dueDate": "2026-10-15",
+        "amount": 425000
+      }
+    ],
+    "clauses": {
+      "ipTransfer": "Full IP rights transfer to Gig Provider upon milestone sign-off.",
+      "confidentiality": "Mutual NDA applies to proprietary source code and architecture.",
+      "governance": "Immutable Dual-Signature Rule: Neither party can unilaterally alter timeline, cost, or features. Any modification requires cryptographic signatures from BOTH parties to mint a new on-chain Agreement version."
+    },
+    "amendmentReason": ""
+  }
+}

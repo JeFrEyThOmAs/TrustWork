@@ -1,0 +1,55 @@
+{
+  "cid": "bafkreiewcdaxxulrvw7yygkhd36f7hb5nqhr4ifgwspcksazhyfaouwwvy",
+  "pinnedAt": "2026-11-25T13:24:21.245Z",
+  "sizeBytes": 1873,
+  "metadata": {
+    "type": "W3C_VERIFIABLE_CREDENTIAL",
+    "credentialId": "0xebfeecf9f75eaf85f3b1a55155229b08311c278294becc9191344f070862a4b8"
+  },
+  "content": {
+    "@context": [
+      "https://www.w3.org/2018/credentials/v1",
+      "https://trustwork.protocol/credentials/v2"
+    ],
+    "id": "urn:trustwork:vc:0xebfeecf9f75eaf85f3b1a55155229b08311c278294becc9191344f070862a4b8",
+    "type": [
+      "VerifiableCredential",
+      "TrustWorkProfessionalCredential"
+    ],
+    "issuer": {
+      "id": "did:trustwork:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "name": "Acme Corp",
+      "organization": "Acme Corporation Pvt. Ltd.",
+      "tier": "ENTERPRISE",
+      "domain": "acmecorp.io"
+    },
+    "issuanceDate": "2026-11-25T13:24:21.244Z",
+    "credentialSubject": {
+      "id": "did:trustwork:0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+      "name": "Arjun Verma",
+      "projectTitle": "E2E Test — Layer-2 Bridge Verifier",
+      "rolePerformed": "Lead Protocol Auditor",
+      "statement": "Arjun delivered the Layer-2 Bridge Verifier & ZK Batch Aggregator.",
+      "skillsVerified": [
+        "Solidity",
+        "ZK Proofs"
+      ],
+      "agreementId": "0x2df7af22b638a3d46256420f5d36ed598c19800148a69241b981a787a05cff32",
+      "agreementVersion": 2,
+      "agreementTermsHash": "0x4a0b040d2e085b6c0908ae976f2d8c03242b4a662514a6e7e790831fc968a33e",
+      "deliverableHashes": [
+        "0xb5c02f749b59ae7e253115053b25987d1ab466a3ee618b31677192a92e6f4e95"
+      ],
+      "rating": 5
+    },
+    "proof": {
+      "type": "EcdsaSecp256k1RecoverySignature2020",
+      "created": "2026-11-25T13:24:21.244Z",
+      "proofPurpose": "assertionMethod",
+      "verificationMethod": "did:trustwork:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC#controller",
+      "vcPayloadKeccak256": "0xb3fa6d26dc49bcf1499793bccf232184cc60295d23d9bf45d7dac5cb0853c656",
+      "onChainDigest": "0xd3483ab6f4a544aad7adaea6322833f8439ff5165ce75441b1a0c1cce6a420a2",
+      "jwsSignature": "0xc4ca0bed7d92c70ee30e8ac63a30985bf0bd71bbbfacafda4410671070c7aa725ce86e54042074417164a734ff171889dac23f013ae46997475c9fbc25f7c4011c"
+    }
+  }
+}

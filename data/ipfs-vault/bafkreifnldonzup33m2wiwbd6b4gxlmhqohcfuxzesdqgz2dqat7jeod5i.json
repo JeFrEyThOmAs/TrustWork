@@ -1,0 +1,67 @@
+{
+  "cid": "bafkreifnldonzup33m2wiwbd6b4gxlmhqohcfuxzesdqgz2dqat7jeod5i",
+  "pinnedAt": "2026-11-25T13:24:21.750Z",
+  "sizeBytes": 2182,
+  "metadata": {
+    "type": "DIGITAL_AGREEMENT",
+    "version": 1
+  },
+  "content": {
+    "schema": "trustwork.digital-agreement.v2",
+    "version": 1,
+    "parentAgreementId": null,
+    "title": "Zero-Trust KYC Telemetry & Risk Scoring Engine",
+    "summary": "Real-time identity verification pipeline and cryptographic audit trail microservice.",
+    "category": "Cybersecurity & RegTech",
+    "parties": {
+      "gigProviderDid": "did:trustwork:0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "freelancerDid": "did:trustwork:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    },
+    "timeline": {
+      "startDate": "2026-11-01",
+      "deadline": "2026-12-05",
+      "durationDays": 35
+    },
+    "compensation": {
+      "totalCost": 620000,
+      "currency": "INR",
+      "paymentSchedule": "Milestone-Based (50% / 50%)"
+    },
+    "features": [
+      {
+        "index": 1,
+        "name": "Encrypted PII Vault & Tokenizer",
+        "description": "Envelope-encrypted off-chain vault separating GDPR personal data from hash commitments.",
+        "acceptanceCriteria": "Zero plaintext PII in logs or telemetry streams"
+      },
+      {
+        "index": 2,
+        "name": "Sub-50ms Risk Scoring gRPC Service",
+        "description": "Rust gRPC microservice evaluating device & velocity signals.",
+        "acceptanceCriteria": "Handles 2,500 req/s at <50ms P95"
+      }
+    ],
+    "milestones": [
+      {
+        "index": 1,
+        "title": "Milestone 1: PII Vault & Cryptographic Tokenizer",
+        "deliverables": "Rust vault crate, KMS integration, OpenAPI/gRPC proto specs",
+        "dueDate": "2026-11-18",
+        "amount": 310000
+      },
+      {
+        "index": 2,
+        "title": "Milestone 2: Streaming Risk Scorer & Load Benchmark",
+        "deliverables": "Risk engine service, Docker deployment charts, benchmark report",
+        "dueDate": "2026-12-05",
+        "amount": 310000
+      }
+    ],
+    "clauses": {
+      "ipTransfer": "Full IP rights transfer to Gig Provider upon milestone sign-off.",
+      "confidentiality": "Mutual NDA applies to proprietary source code and architecture.",
+      "governance": "Immutable Dual-Signature Rule: Neither party can unilaterally alter timeline, cost, or features. Any modification requires cryptographic signatures from BOTH parties to mint a new on-chain Agreement version."
+    },
+    "amendmentReason": ""
+  }
+}
