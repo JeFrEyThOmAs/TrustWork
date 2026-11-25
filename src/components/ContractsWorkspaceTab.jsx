@@ -1,31 +1,21 @@
 import React, { useMemo, useState } from 'react';
 import {
-  FileSignature,
   Plus,
-  CheckCircle2,
+  Check,
   Clock,
-  GitBranch,
   ArrowRight,
   Lock,
-  ShieldAlert,
-  Upload,
-  Award,
   Send,
-  MessageSquare,
-  GitCommit,
-  RefreshCw,
-  SearchCheck,
-  XCircle,
 } from 'lucide-react';
 import {
   agreementStatusMeta,
   apiFetch,
   formatCurrency,
-  initials,
   shortHex,
   signDigestWithBrowserWallet,
   tierMeta,
 } from '../lib/wallet.js';
+import { CryptoSignModal } from './CryptoSignModal.jsx';
 
 export default function ContractsWorkspaceTab({
   agreements,
@@ -42,41 +32,26 @@ export default function ContractsWorkspaceTab({
   onRefresh,
   showToast,
 }) {
-  const [scopeFilter, setScopeFilter] = useState('MINE');
-  const [createModalOpen, setCreateModalOpen] = useState(Boolean(directHirePrefill));
+  const [subView, setSubView] = useState('terms');
+  const [createOpen, setCreateOpen] = useState(Boolean(directHirePrefill));
   const [amendTarget, setAmendTarget] = useState(null);
   const [tamperModal, setTamperModal] = useState(null);
   const [tamperResult, setTamperResult] = useState(null);
   const [evidenceModalMs, setEvidenceModalMs] = useState(null);
   const [issueVcModal, setIssueVcModal] = useState(false);
+  const [cryptoPrompt, setCryptoPrompt] = useState(null);
   const [chatInput, setChatInput] = useState('');
   const [busy, setBusy] = useState(false);
 
   React.useEffect(() => {
-    if (directHirePrefill) setCreateModalOpen(true);
+    if (directHirePrefill) setCreateOpen(true);
   }, [directHirePrefill]);
-
-  const visibleAgreements = useMemo(() => {
-    return agreements.filter((a) => {
-      if (scopeFilter === 'MINE') {
-        return a.clientDid === currentUser?.did || a.freelancerDid === currentUser?.did;
-      }
-      if (scopeFilter === 'PENDING') {
-        return a.status === 'PENDING_SIGNATURES' || a.status === 'AMENDMENT_PENDING';
-      }
-      if (scopeFilter === 'ACTIVE') return a.status === 'ACTIVE';
-      return true;
-    });
-  }, [agreements, scopeFilter, currentUser]);
 
   const selected = useMemo(() => {
     return (
-      agreements.find((a) => a.id === selectedAgreementId) ||
-      visibleAgreements[0] ||
-      agreements[0] ||
-      null
+      agreements.find((a) => a.id === selectedAgreementId) || agreements[0] || null
     );
-  }, [agreements, visibleAgreements, selectedAgreementId]);
+  }, [agreements, selectedAgreementId]);
 
   const lineage = useMemo(() => {
     if (!selected) return [];
@@ -112,61 +87,55 @@ export default function ContractsWorkspaceTab({
   }, [credentials, selected]);
 
   async function maybeExternalSig(digestHex) {
-    if (!currentUser || currentUser.hasCustodialKey) return null;
+    if (!currentUser?.usesExternalWallet) return null;
     return signDigestWithBrowserWallet(currentUser.address, digestHex);
   }
 
-  async function handleCoSignInitial(ag) {
-    setBusy(true);
-    try {
-      const extSig = await maybeExternalSig(ag.signingDigest);
-      const res = await apiFetch(`/api/agreements/${ag.id}/cosign`, {
-        method: 'POST',
-        body: JSON.stringify({ actorDid: currentUser.did, signature: extSig }),
-      });
-      await onRefresh();
-      showToast(
-        `Digital Agreement v1 co-signed & stored on blockchain at Block #${res.receipt.blockNumber}!`
-      );
-    } catch (err) {
-      showToast(err.message, 'error');
-    } finally {
-      setBusy(false);
-    }
+  function handleCoSignInitial(ag) {
+    setCryptoPrompt({
+      title: `Co-Sign Digital Agreement v1 — ${ag.title}`,
+      subtitle: 'Verify the Keccak-256 hash and sign with your Private Key to anchor this agreement on the blockchain.',
+      termsHash: ag.termsHash,
+      signingDigest: ag.signingDigest,
+      onSigned: async (signatureHex) => {
+        const res = await apiFetch(`/api/agreements/${ag.id}/cosign`, {
+          method: 'POST',
+          body: JSON.stringify({ signature: signatureHex }),
+        });
+        setCryptoPrompt(null);
+        await onRefresh();
+        showToast(`Dual signatures verified! Agreement v1 anchored on-chain (Block #${res.receipt.blockNumber}).`);
+      },
+    });
   }
 
-  async function handleCoSignAmendment(proposal) {
-    setBusy(true);
-    try {
-      const extSig = await maybeExternalSig(proposal.signingDigest);
-      const res = await apiFetch(`/api/agreements/${proposal.id}/cosign-amendment`, {
-        method: 'POST',
-        body: JSON.stringify({ actorDid: currentUser.did, signature: extSig }),
-      });
-      setSelectedAgreementId(proposal.id);
-      await onRefresh();
-      showToast(
-        `Both parties agreed! New Agreement v${proposal.version} anchored at Block #${res.receipt.blockNumber} (v${proposal.version - 1} marked Superseded).`
-      );
-    } catch (err) {
-      showToast(err.message, 'error');
-    } finally {
-      setBusy(false);
-    }
+  function handleCoSignAmendment(proposal) {
+    setCryptoPrompt({
+      title: `Approve & Co-Sign Modified Agreement v${proposal.version}`,
+      subtitle: `Both parties must sign to supersede v${proposal.version - 1} and mint v${proposal.version} on-chain.`,
+      termsHash: proposal.termsHash,
+      signingDigest: proposal.signingDigest,
+      onSigned: async (signatureHex) => {
+        const res = await apiFetch(`/api/agreements/${proposal.id}/cosign-amendment`, {
+          method: 'POST',
+          body: JSON.stringify({ signature: signatureHex }),
+        });
+        setCryptoPrompt(null);
+        setSelectedAgreementId(proposal.id);
+        await onRefresh();
+        showToast(
+          `Mutual modification co-signed! New Agreement v${proposal.version} anchored at Block #${res.receipt.blockNumber}.`
+        );
+      },
+    });
   }
 
   async function handleDecline(ag) {
     setBusy(true);
     try {
-      await apiFetch(`/api/agreements/${ag.id}/reject`, {
-        method: 'POST',
-        body: JSON.stringify({
-          actorDid: currentUser.did,
-          reason: `Declined by ${currentUser.name}`,
-        }),
-      });
+      await apiFetch(`/api/agreements/${ag.id}/reject`, { method: 'POST', body: '{}' });
       await onRefresh();
-      showToast('Proposal declined. Existing active contract remains unchanged.');
+      showToast('Proposal declined.');
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -174,33 +143,26 @@ export default function ContractsWorkspaceTab({
     }
   }
 
-  async function handleMilestoneSignOff(ms) {
-    if (!selected) return;
-    if (currentUser?.did !== selected.clientDid) {
-      showToast(
-        `Switch account in the navbar to ${selected.clientName} (Gig Provider) to approve & sign off this deliverable.`,
-        'error'
-      );
-      return;
-    }
-    setBusy(true);
-    try {
-      const extSig = await maybeExternalSig(ms.signingDigest);
-      const res = await apiFetch(`/api/milestones/${ms.id}/sign-off`, {
-        method: 'POST',
-        body: JSON.stringify({ actorDid: currentUser.did, signature: extSig }),
-      });
-      await onRefresh();
-      showToast(
-        res.agreementCompleted
-          ? `All milestones approved! Contract completed on-chain — you can now issue the Verified Work Credential.`
-          : `Milestone #${ms.index} signed off & anchored at Block #${res.receipt.blockNumber}!`
-      );
-    } catch (err) {
-      showToast(err.message, 'error');
-    } finally {
-      setBusy(false);
-    }
+  function handleMilestoneSignOff(ms) {
+    setCryptoPrompt({
+      title: `Approve & Sign Off ${ms.title}`,
+      subtitle: 'Sign the deliverable proof digest with your Private Key to verify completion on-chain.',
+      termsHash: ms.deliverableHash,
+      signingDigest: ms.signingDigest,
+      onSigned: async (signatureHex) => {
+        const res = await apiFetch(`/api/milestones/${ms.id}/sign-off`, {
+          method: 'POST',
+          body: JSON.stringify({ signature: signatureHex }),
+        });
+        setCryptoPrompt(null);
+        await onRefresh();
+        showToast(
+          res.agreementCompleted
+            ? 'All milestones approved and contract marked completed on-chain.'
+            : `Milestone #${ms.index} approved on-chain (Block #${res.receipt.blockNumber}).`
+        );
+      },
+    });
   }
 
   async function handleSendChat(e) {
@@ -211,7 +173,6 @@ export default function ContractsWorkspaceTab({
         method: 'POST',
         body: JSON.stringify({
           threadId: selected.rootAgreementId,
-          senderDid: currentUser.did,
           body: chatInput,
         }),
       });
@@ -230,7 +191,6 @@ export default function ContractsWorkspaceTab({
       const res = await apiFetch(`/api/agreements/${tamperModal.agreement.id}/simulate-tamper`, {
         method: 'POST',
         body: JSON.stringify({
-          attackerDid: tamperModal.attackerDid,
           tamperedCost: Number(tamperModal.tamperedCost),
           tamperedDeadline: tamperModal.tamperedDeadline,
           tamperedFeatureTitle: tamperModal.tamperedFeatureTitle,
@@ -244,93 +204,61 @@ export default function ContractsWorkspaceTab({
     }
   }
 
-  const isParty =
-    selected &&
-    currentUser &&
-    (selected.clientDid === currentUser.did || selected.freelancerDid === currentUser.did);
-
   const needsMyInitialSig =
     selected?.status === 'PENDING_SIGNATURES' &&
-    currentUser &&
-    ((selected.clientDid === currentUser.did && !selected.clientSignature) ||
-      (selected.freelancerDid === currentUser.did && !selected.freelancerSignature));
+    ((selected.clientDid === currentUser?.did && !selected.clientSignature) ||
+      (selected.freelancerDid === currentUser?.did && !selected.freelancerSignature));
 
   const needsMyAmendmentSig =
     selected?.status === 'AMENDMENT_PENDING' &&
-    currentUser &&
-    ((selected.clientDid === currentUser.did && !selected.clientSignature) ||
-      (selected.freelancerDid === currentUser.did && !selected.freelancerSignature));
+    ((selected.clientDid === currentUser?.did && !selected.clientSignature) ||
+      (selected.freelancerDid === currentUser?.did && !selected.freelancerSignature));
+
+  const otherUsersExist = identities.filter((u) => u.did !== currentUser?.did).length > 0;
 
   return (
-    <div className="space-y-6">
-      {/* Top Header */}
-      <div className="tw-card p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">
-            Digital Agreements &amp; Project Workspaces
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Every contract locks agreed <strong>time</strong>, <strong>cost</strong>, and{' '}
-            <strong>features</strong> on the blockchain once both parties sign. Modifying any term requires mutual signatures, creating a new linked agreement version.
-          </p>
-        </div>
-
+    <div className="h-full flex flex-col bg-white">
+      {/* Top Bar */}
+      <div className="h-14 shrink-0 border-b border-zinc-200 px-6 flex items-center justify-between">
+        <h1 className="text-sm font-semibold text-zinc-900">
+          Digital Agreements ({agreements.length})
+        </h1>
         <button
           type="button"
-          onClick={() => setCreateModalOpen(true)}
-          className="tw-btn-primary px-4 py-2.5 text-xs sm:text-sm flex items-center gap-1.5 shrink-0"
+          onClick={() => {
+            if (!otherUsersExist) {
+              showToast(
+                'Register a second user account in another browser (or hire from an open gig) so you have a counterparty.',
+                'error'
+              );
+              return;
+            }
+            setCreateOpen(true);
+          }}
+          className="ui-btn-primary flex items-center gap-1.5"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-3.5 h-3.5" />
           <span>New Digital Agreement</span>
         </button>
       </div>
 
-      {/* Filter Bar */}
-      <div className="flex flex-wrap gap-2">
-        {[
-          { id: 'MINE', label: 'My Contracts' },
-          { id: 'ALL', label: `All Platform Contracts (${agreements.length})` },
-          {
-            id: 'PENDING',
-            label: `Awaiting Signature (${
-              agreements.filter(
-                (a) => a.status === 'PENDING_SIGNATURES' || a.status === 'AMENDMENT_PENDING'
-              ).length
-            })`,
-          },
-          {
-            id: 'ACTIVE',
-            label: `Active On-Chain (${agreements.filter((a) => a.status === 'ACTIVE').length})`,
-          },
-        ].map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => setScopeFilter(f.id)}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-              scopeFilter === f.id
-                ? 'bg-indigo-600 text-white'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Master-Detail Workspace */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Agreement List */}
-        <div className="lg:col-span-4 space-y-3">
-          {visibleAgreements.length === 0 ? (
-            <div className="tw-card p-6 text-xs text-slate-500">
-              No contracts in this view yet. Switch to &ldquo;All Platform Contracts&rdquo; or create a new Digital Agreement!
-            </div>
-          ) : (
-            visibleAgreements.map((ag) => {
+      {agreements.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="max-w-sm text-center space-y-2">
+            <div className="text-sm font-semibold text-zinc-900">No agreements yet</div>
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Digital Agreements are created when you accept a freelancer&apos;s proposal on a gig or draft a direct agreement from the Directory. Both parties must sign before the agreement is anchored on the blockchain.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
+          {/* Left Agreement List */}
+          <div className="lg:col-span-4 border-r border-zinc-200 overflow-y-auto divide-y divide-zinc-200">
+            {agreements.map((ag) => {
+              const active = selected?.id === ag.id;
               const sMeta = agreementStatusMeta(ag.status);
-              const isSelected = selected?.id === ag.id;
-              const waitingOnMe =
+              const myTurn =
                 (ag.status === 'PENDING_SIGNATURES' || ag.status === 'AMENDMENT_PENDING') &&
                 ((ag.clientDid === currentUser?.did && !ag.clientSignature) ||
                   (ag.freelancerDid === currentUser?.did && !ag.freelancerSignature));
@@ -339,615 +267,583 @@ export default function ContractsWorkspaceTab({
                 <div
                   key={ag.id}
                   onClick={() => setSelectedAgreementId(ag.id)}
-                  className={`rounded-xl p-4 border cursor-pointer transition ${
-                    isSelected
-                      ? 'bg-indigo-50/60 border-indigo-500 ring-2 ring-indigo-500/15'
-                      : 'bg-white border-slate-200 hover:border-slate-300'
+                  className={`p-4 cursor-pointer transition ${
+                    active ? 'bg-zinc-50' : 'hover:bg-zinc-50/50'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${sMeta.cls}`}>
+                    <span className={`ui-badge ${sMeta.cls}`}>
                       {sMeta.label} · v{ag.version}
                     </span>
-                    <span className="font-mono font-bold text-xs text-slate-900">
+                    <span className="text-xs font-semibold tabular-nums text-zinc-900">
                       {formatCurrency(ag.totalCost, ag.currency)}
                     </span>
                   </div>
-                  <h3 className="font-bold text-sm text-slate-900 mt-2 leading-snug">
-                    {ag.title}
-                  </h3>
-                  <div className="text-xs text-slate-500 mt-1">
-                    {ag.clientName.split('(')[0].trim()} ↔ {ag.freelancerName}
+                  <div className="font-semibold text-sm text-zinc-900 mt-2">{ag.title}</div>
+                  <div className="text-xs text-zinc-500 mt-0.5">
+                    {ag.clientName} ↔ {ag.freelancerName}
                   </div>
-                  <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-100 text-[11px] text-slate-400">
-                    <span>Deadline: {ag.deadline}</span>
-                    {waitingOnMe ? (
-                      <span className="text-rose-600 font-semibold">● Your Signature Needed</span>
+                  <div className="flex items-center justify-between mt-2.5 text-[11px] text-zinc-500">
+                    <span>Deadline {ag.deadline}</span>
+                    {myTurn ? (
+                      <span className="text-amber-700 font-medium">Signature required</span>
                     ) : ag.blockNumber ? (
-                      <span className="text-emerald-600 font-mono font-medium">
-                        Block #{ag.blockNumber}
-                      </span>
-                    ) : (
-                      <span>Pending</span>
-                    )}
+                      <span className="font-mono text-zinc-600">Block #{ag.blockNumber}</span>
+                    ) : null}
                   </div>
                 </div>
               );
-            })
-          )}
-        </div>
+            })}
+          </div>
 
-        {/* Right Contract Detail + Milestones + Live Chat */}
-        {selected && (
-          <div className="lg:col-span-8 space-y-5">
-            {/* Version History Chain */}
-            <div className="tw-card p-3.5 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5 mr-1">
-                <GitBranch className="w-4 h-4 text-indigo-600" />
-                Agreement History:
-              </span>
-              {lineage.map((ver, idx) => (
-                <React.Fragment key={ver.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedAgreementId(ver.id)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                      ver.id === selected.id
-                        ? 'bg-slate-900 text-white'
-                        : ver.status === 'AMENDMENT_PENDING'
-                          ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    v{ver.version} · {agreementStatusMeta(ver.status).label} (
-                    {formatCurrency(ver.totalCost, ver.currency)})
-                  </button>
-                  {idx < lineage.length - 1 && (
-                    <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
-                  )}
-                </React.Fragment>
-              ))}
-            </div>
-
-            {/* Alert if a Pending Change Request Exists on This Active Contract */}
-            {selected.status === 'ACTIVE' && pendingChildAmendment && (
-              <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <span className="text-xs font-bold text-rose-700 uppercase">
-                    Pending Modification Request (v{pendingChildAmendment.version})
-                  </span>
-                  <p className="text-xs text-rose-900 mt-0.5">
-                    A change to time/cost/features has been proposed. Agreement v{selected.version} stays active and protected on-chain until both parties sign v{pendingChildAmendment.version}.
-                  </p>
+          {/* Right Workspace Pane */}
+          {selected && (
+            <div className="lg:col-span-8 flex flex-col min-h-0">
+              {/* Sub-header with Version Chain & Sub-tabs */}
+              <div className="px-6 py-3 border-b border-zinc-200 bg-zinc-50/50 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-zinc-500 mr-1">Versions:</span>
+                  {lineage.map((ver, idx) => (
+                    <React.Fragment key={ver.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAgreementId(ver.id)}
+                        className={`px-2 py-0.5 rounded font-medium cursor-pointer ${
+                          ver.id === selected.id
+                            ? 'bg-zinc-900 text-white'
+                            : 'bg-white border border-zinc-200 text-zinc-700'
+                        }`}
+                      >
+                        v{ver.version} ({agreementStatusMeta(ver.status).label})
+                      </button>
+                      {idx < lineage.length - 1 && (
+                        <ArrowRight className="w-3 h-3 text-zinc-400" />
+                      )}
+                    </React.Fragment>
+                  ))}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedAgreementId(pendingChildAmendment.id)}
-                  className="tw-btn-primary px-3.5 py-2 text-xs shrink-0"
-                >
-                  Review Modification Diff (v{pendingChildAmendment.version})
-                </button>
-              </div>
-            )}
 
-            {/* Co-Sign Banner for Initial Pending v1 */}
-            {selected.status === 'PENDING_SIGNATURES' && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <span className="text-xs font-bold text-amber-800 uppercase">
-                    Dual-Party Agreement Approval · Version 1
-                  </span>
-                  <p className="text-xs text-amber-900 mt-0.5">
-                    {needsMyInitialSig
-                      ? `${currentUser.name}, review the agreed timeline, cost, and features below and click Sign to store this agreement on the blockchain.`
-                      : `Signed by proposer. Waiting for ${
-                          !selected.clientSignature ? selected.clientName : selected.freelancerName
-                        } to co-sign (switch account in top-right to test co-signing!).`}
-                  </p>
-                </div>
-                {needsMyInitialSig && (
-                  <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1 bg-zinc-200/70 p-0.5 rounded-md text-xs">
+                  {[
+                    { id: 'terms', label: 'Agreement Terms' },
+                    {
+                      id: 'milestones',
+                      label: `Deliverables (${selected.milestones?.length || 0})`,
+                    },
+                    { id: 'messages', label: `Messages (${workspaceMessages.length})` },
+                  ].map((t) => (
                     <button
+                      key={t.id}
                       type="button"
-                      disabled={busy}
-                      onClick={() => handleCoSignInitial(selected)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-4 py-2 rounded-xl text-xs cursor-pointer"
+                      onClick={() => setSubView(t.id)}
+                      className={`px-2.5 py-1 rounded transition cursor-pointer ${
+                        subView === t.id
+                          ? 'bg-white text-zinc-900 font-medium shadow-2xs'
+                          : 'text-zinc-600'
+                      }`}
                     >
-                      {busy ? 'Storing On-Chain...' : '✓ Agree & Sign On Blockchain'}
+                      {t.label}
                     </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 sm:p-8 space-y-6">
+                {/* Pending Child Modification Notice */}
+                {selected.status === 'ACTIVE' && pendingChildAmendment && (
+                  <div className="p-4 rounded-lg border border-amber-300 bg-amber-50 flex items-center justify-between gap-4 text-xs">
+                    <div>
+                      <div className="font-semibold text-amber-950">
+                        Modification Request v{pendingChildAmendment.version} Pending
+                      </div>
+                      <div className="text-amber-800 mt-0.5">
+                        Version {selected.version} remains active on-chain until both parties sign v{pendingChildAmendment.version}.
+                      </div>
+                    </div>
                     <button
                       type="button"
-                      disabled={busy}
-                      onClick={() => handleDecline(selected)}
-                      className="tw-btn-secondary px-3 py-2 text-xs text-red-600"
+                      onClick={() => setSelectedAgreementId(pendingChildAmendment.id)}
+                      className="ui-btn-primary shrink-0"
                     >
-                      Decline
+                      Review Modification
                     </button>
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* Mutual Modification Diff & Co-Sign Card (v2+) */}
-            {parentAgreement && (
-              <div className="tw-card p-5 border-l-4 border-l-indigo-600 space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <span className="text-xs font-bold text-indigo-600 uppercase">
-                      Mutual Modification Comparison · v{parentAgreement.version} ➔ v{selected.version}
-                    </span>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      <strong>Change Summary:</strong> {selected.amendmentReason}
-                    </p>
-                  </div>
-
-                  {selected.status === 'AMENDMENT_PENDING' &&
-                    (needsMyAmendmentSig ? (
+                {/* Initial Co-Sign Callout */}
+                {selected.status === 'PENDING_SIGNATURES' && (
+                  <div className="p-4 rounded-lg border border-amber-300 bg-amber-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <div className="font-semibold text-amber-950">
+                        {needsMyInitialSig
+                          ? 'Your signature is required to store this agreement on the blockchain'
+                          : `Waiting for ${
+                              !selected.clientSignature
+                                ? selected.clientName
+                                : selected.freelancerName
+                            } to co-sign`}
+                      </div>
+                      <div className="text-amber-800 mt-0.5">
+                        Once both parties sign, timeline, cost, and features become tamper-proof on-chain.
+                      </div>
+                    </div>
+                    {needsMyInitialSig && (
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => handleCoSignAmendment(selected)}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-4 py-2 rounded-xl text-xs cursor-pointer"
+                          onClick={() => handleCoSignInitial(selected)}
+                          className="ui-btn-primary"
                         >
-                          {busy
-                            ? 'Minting New Agreement...'
-                            : `✓ Approve & Mint Agreement v${selected.version}`}
+                          {busy ? 'Anchoring...' : 'Agree & Sign On-Chain'}
                         </button>
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => handleDecline(selected)}
-                          className="tw-btn-secondary px-3 py-2 text-xs text-red-600"
+                          className="ui-btn-secondary"
                         >
-                          Decline Change
+                          Decline
                         </button>
                       </div>
-                    ) : (
-                      <span className="text-xs bg-amber-50 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-lg font-medium">
-                        Waiting for{' '}
-                        {!selected.clientSignature ? selected.clientName : selected.freelancerName}{' '}
-                        to co-sign
-                      </span>
-                    ))}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-slate-400 font-semibold">AGREED COST</div>
-                    <div className="mt-1 font-mono">
-                      <span className="line-through text-rose-500 mr-1.5">
-                        {formatCurrency(parentAgreement.totalCost, parentAgreement.currency)}
-                      </span>
-                      <span className="font-bold text-emerald-700">
-                        ➔ {formatCurrency(selected.totalCost, selected.currency)}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-slate-400 font-semibold">DEADLINE</div>
-                    <div className="mt-1 font-mono">
-                      <span className="line-through text-rose-500 mr-1.5">
-                        {parentAgreement.deadline}
-                      </span>
-                      <span className="font-bold text-indigo-700">➔ {selected.deadline}</span>
-                    </div>
-                  </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-slate-400 font-semibold">SCOPE ITEMS</div>
-                    <div className="mt-1 font-semibold text-slate-800">
-                      {parentAgreement.features.length} ➔ {selected.features.length} Features ·{' '}
-                      {parentAgreement.milestonesSpec.length} ➔ {selected.milestonesSpec.length}{' '}
-                      Milestones
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Main Digital Agreement Specification */}
-            <div className="tw-card p-5 sm:p-6 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-slate-100 pb-4">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
-                        agreementStatusMeta(selected.status).cls
-                      }`}
-                    >
-                      {agreementStatusMeta(selected.status).label} · Version {selected.version}
-                    </span>
-                    <span className="text-xs text-slate-500">{selected.category}</span>
-                  </div>
-                  <h2 className="text-xl font-bold text-slate-900 mt-1.5">{selected.title}</h2>
-                  <p className="text-xs sm:text-sm text-slate-600 mt-1">{selected.summary}</p>
-                </div>
-
-                {/* Contract Actions */}
-                <div className="flex flex-wrap gap-2 shrink-0">
-                  {selected.status === 'ACTIVE' && !pendingChildAmendment && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!isParty) {
-                          showToast(
-                            `Switch account to ${selected.clientName} or ${selected.freelancerName} to propose a contract modification.`,
-                            'error'
-                          );
-                          return;
-                        }
-                        setAmendTarget(selected);
-                      }}
-                      className="tw-btn-primary px-3.5 py-2 text-xs flex items-center gap-1.5"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>Modify Agreement (Mutual Consent)</span>
-                    </button>
-                  )}
-
-                  {selected.txHash && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTamperResult(null);
-                          setTamperModal({
-                            agreement: selected,
-                            attackerDid: selected.clientDid,
-                            tamperedCost: Math.round(selected.totalCost * 0.5),
-                            tamperedDeadline: selected.deadline,
-                            tamperedFeatureTitle:
-                              (selected.features[0]?.name || 'Feature') + ' + Extra Unagreed Work',
-                          });
-                        }}
-                        className="tw-btn-secondary px-3 py-2 text-xs text-rose-700 border-rose-200 hover:bg-rose-50 flex items-center gap-1.5"
-                      >
-                        <ShieldAlert className="w-3.5 h-3.5" />
-                        <span>Test Tamper Lock</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onOpenAudit('agreement', selected.id, selected.canonicalPayload)
-                        }
-                        className="tw-btn-secondary px-3 py-2 text-xs flex items-center gap-1.5"
-                      >
-                        <SearchCheck className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Verify On-Chain</span>
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Dual Signers */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold">
-                    <span>GIG PROVIDER (CLIENT)</span>
-                    <span className={`px-2 py-0.2 rounded-full border ${tierMeta(selected.clientTier).badge}`}>
-                      {tierMeta(selected.clientTier).label}
-                    </span>
-                  </div>
-                  <div className="font-bold text-sm text-slate-900 mt-1">{selected.clientName}</div>
-                  <div className="font-mono text-[11px] text-slate-400 truncate">
-                    {selected.clientDid}
-                  </div>
-                  <div className="mt-2 pt-2 border-t border-slate-200 text-xs">
-                    {selected.clientSignature ? (
-                      <span className="text-emerald-700 font-medium flex items-center gap-1 font-mono text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Signed ({shortHex(selected.clientSignature, 10, 6)})
-                      </span>
-                    ) : (
-                      <span className="text-amber-700 font-medium flex items-center gap-1 text-[11px]">
-                        <Clock className="w-3.5 h-3.5" />
-                        Awaiting Signature
-                      </span>
                     )}
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold">
-                    <span>FREELANCER</span>
-                    <span className="px-2 py-0.2 rounded-full bg-white border border-slate-200 text-slate-600">
-                      Self-Controlled DID
-                    </span>
-                  </div>
-                  <div className="font-bold text-sm text-slate-900 mt-1">
-                    {selected.freelancerName}
-                  </div>
-                  <div className="font-mono text-[11px] text-slate-400 truncate">
-                    {selected.freelancerDid}
-                  </div>
-                  <div className="mt-2 pt-2 border-t border-slate-200 text-xs">
-                    {selected.freelancerSignature ? (
-                      <span className="text-emerald-700 font-medium flex items-center gap-1 font-mono text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Signed ({shortHex(selected.freelancerSignature, 10, 6)})
-                      </span>
-                    ) : (
-                      <span className="text-amber-700 font-medium flex items-center gap-1 text-[11px]">
-                        <Clock className="w-3.5 h-3.5" />
-                        Awaiting Signature
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Agreed Time & Cost */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-3">
-                  <div className="text-[11px] font-semibold text-indigo-600">AGREED PRICE</div>
-                  <div className="text-lg font-extrabold text-slate-900 mt-0.5">
-                    {formatCurrency(selected.totalCost, selected.currency)}
-                  </div>
-                </div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <div className="text-[11px] font-semibold text-slate-400">START DATE</div>
-                  <div className="text-sm font-bold text-slate-800 mt-1 font-mono">
-                    {selected.startDate}
-                  </div>
-                </div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <div className="text-[11px] font-semibold text-slate-400">DEADLINE</div>
-                  <div className="text-sm font-bold text-slate-800 mt-1 font-mono">
-                    {selected.deadline}
-                  </div>
-                </div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <div className="text-[11px] font-semibold text-slate-400">TIMELINE</div>
-                  <div className="text-xs font-bold text-slate-800 mt-1">
-                    {selected.durationDays} Days · {selected.paymentSchedule}
-                  </div>
-                </div>
-              </div>
-
-              {/* Agreed Features */}
-              <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                  Agreed Features &amp; Acceptance Criteria ({selected.features.length})
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {selected.features.map((f, idx) => (
-                    <div
-                      key={idx}
-                      className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1"
-                    >
-                      <div className="font-bold text-slate-900">
-                        {idx + 1}. {f.name}
-                      </div>
-                      {f.description && <p className="text-slate-600">{f.description}</p>}
-                      <div className="text-[11px] text-indigo-700 font-medium">
-                        Acceptance: {f.acceptanceCriteria}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Blockchain Proof Strip */}
-              <div className="rounded-xl bg-slate-900 text-slate-200 p-3.5 text-xs font-mono space-y-1">
-                <div className="flex items-center gap-1.5 text-emerald-400 font-sans font-semibold text-xs mb-1">
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Blockchain Fingerprint (Keccak-256 + IPFS Content CID)</span>
-                </div>
-                <div className="truncate">
-                  <span className="text-slate-400">Terms Hash: </span>
-                  <span className="text-emerald-300">{selected.termsHash}</span>
-                </div>
-                <div className="truncate">
-                  <span className="text-slate-400">IPFS CID: </span>
-                  <span className="text-sky-300">{selected.ipfsCid}</span>
-                </div>
-                {selected.txHash && (
-                  <div className="truncate">
-                    <span className="text-slate-400">
-                      On-Chain Tx (Block #{selected.blockNumber}):{' '}
-                    </span>
-                    <span className="text-amber-300">{selected.txHash}</span>
                   </div>
                 )}
-              </div>
-            </div>
 
-            {/* MILESTONE DELIVERABLES & CREDENTIAL ISSUANCE */}
-            {(selected.status === 'ACTIVE' || selected.status === 'COMPLETED') && (
-              <div className="tw-card p-5 sm:p-6 space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <h3 className="font-bold text-base text-slate-900">
-                      Milestones, Deliverable Proofs &amp; Sign-Off
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Freelancer submits Git commit hashes &amp; deliverables; Gig Provider approves &amp; anchors completion on-chain.
-                    </p>
-                  </div>
+                {/* Amendment Comparison Diff */}
+                {parentAgreement && (
+                  <div className="border border-zinc-200 rounded-lg overflow-hidden">
+                    <div className="px-4 py-3 bg-zinc-50 border-b border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                      <div>
+                        <span className="font-semibold text-zinc-900">
+                          Modification Summary (v{parentAgreement.version} → v{selected.version}):
+                        </span>{' '}
+                        <span className="text-zinc-600">{selected.amendmentReason}</span>
+                      </div>
 
-                  {existingVc ? (
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('reputation')}
-                      className="tw-btn-secondary px-3.5 py-2 text-xs text-emerald-700 border-emerald-200 bg-emerald-50 flex items-center gap-1.5"
-                    >
-                      <Award className="w-4 h-4" />
-                      <span>Verified Work Credential Issued ➔</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (currentUser?.did !== selected.clientDid) {
-                          showToast(
-                            `Switch account to ${selected.clientName} (Gig Provider) to issue the Verified Work Credential.`,
-                            'error'
-                          );
-                          return;
-                        }
-                        setIssueVcModal(true);
-                      }}
-                      className="tw-btn-primary px-3.5 py-2 text-xs flex items-center gap-1.5"
-                    >
-                      <Award className="w-4 h-4" />
-                      <span>Issue Verified Work Credential</span>
-                    </button>
-                  )}
-                </div>
-
-                <div className="space-y-3">
-                  {selected.milestones.map((ms) => (
-                    <div
-                      key={ms.id}
-                      className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-2.5"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-900">{ms.title}</span>
-                            <span
-                              className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                                ms.status === 'VERIFIED_ONCHAIN'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : ms.status === 'EVIDENCE_SUBMITTED'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-slate-200 text-slate-600'
-                              }`}
-                            >
-                              {ms.status === 'VERIFIED_ONCHAIN'
-                                ? '✓ Approved On-Chain'
-                                : ms.status === 'EVIDENCE_SUBMITTED'
-                                  ? 'Deliverable Submitted'
-                                  : 'In Progress'}
-                            </span>
-                          </div>
-                          <div className="text-xs text-slate-500 mt-0.5">
-                            {ms.deliverables} · Due {ms.dueDate}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2.5">
-                          <span className="font-mono font-bold text-sm text-slate-900">
-                            {formatCurrency(ms.amount, selected.currency)}
-                          </span>
-
-                          {ms.status === 'PENDING' && selected.status === 'ACTIVE' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (currentUser?.did !== selected.freelancerDid) {
-                                  showToast(
-                                    `Switch account to ${selected.freelancerName} (Freelancer) to submit deliverables.`,
-                                    'error'
-                                  );
-                                  return;
-                                }
-                                setEvidenceModalMs(ms);
-                              }}
-                              className="tw-btn-primary px-3 py-1.5 text-xs flex items-center gap-1"
-                            >
-                              <Upload className="w-3.5 h-3.5" />
-                              <span>Submit Work</span>
-                            </button>
-                          )}
-
-                          {ms.status === 'EVIDENCE_SUBMITTED' && selected.status === 'ACTIVE' && (
+                      {selected.status === 'AMENDMENT_PENDING' &&
+                        (needsMyAmendmentSig ? (
+                          <div className="flex items-center gap-2 shrink-0">
                             <button
                               type="button"
                               disabled={busy}
-                              onClick={() => handleMilestoneSignOff(ms)}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3 py-1.5 rounded-lg text-xs cursor-pointer"
+                              onClick={() => handleCoSignAmendment(selected)}
+                              className="ui-btn-primary"
                             >
-                              ✓ Approve &amp; Sign Off
+                              {busy ? 'Signing...' : `Approve & Mint v${selected.version}`}
                             </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleDecline(selected)}
+                              className="ui-btn-secondary"
+                            >
+                              Decline
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-amber-700 font-medium">
+                            Awaiting counterparty signature
+                          </span>
+                        ))}
+                    </div>
+
+                    <div className="grid grid-cols-3 divide-x divide-zinc-200 text-xs">
+                      <div className="p-3">
+                        <div className="text-zinc-500">Compensation</div>
+                        <div className="mt-1 tabular-nums">
+                          <span className="line-through text-zinc-400 mr-1.5">
+                            {formatCurrency(parentAgreement.totalCost, parentAgreement.currency)}
+                          </span>
+                          <span className="font-semibold text-zinc-900">
+                            {formatCurrency(selected.totalCost, selected.currency)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <div className="text-zinc-500">Deadline</div>
+                        <div className="mt-1 font-mono">
+                          <span className="line-through text-zinc-400 mr-1.5">
+                            {parentAgreement.deadline}
+                          </span>
+                          <span className="font-semibold text-zinc-900">{selected.deadline}</span>
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <div className="text-zinc-500">Scope</div>
+                        <div className="mt-1 font-medium text-zinc-900 tabular-nums">
+                          {parentAgreement.features.length} → {selected.features.length} features
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {subView === 'terms' && (
+                  <div className="space-y-6">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-5 border-b border-zinc-200">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className={`ui-badge ${agreementStatusMeta(selected.status).cls}`}>
+                            {agreementStatusMeta(selected.status).label} · Version {selected.version}
+                          </span>
+                          <span className="text-xs text-zinc-500">{selected.category}</span>
+                        </div>
+                        <h2 className="text-lg font-semibold text-zinc-900 mt-1.5">
+                          {selected.title}
+                        </h2>
+                        <p className="text-xs text-zinc-600 mt-1">{selected.summary}</p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 shrink-0">
+                        {selected.status === 'ACTIVE' && !pendingChildAmendment && (
+                          <button
+                            type="button"
+                            onClick={() => setAmendTarget(selected)}
+                            className="ui-btn-primary"
+                          >
+                            Modify Agreement
+                          </button>
+                        )}
+                        {selected.txHash && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTamperResult(null);
+                                setTamperModal({
+                                  agreement: selected,
+                                  tamperedCost: Math.round(selected.totalCost * 0.5),
+                                  tamperedDeadline: selected.deadline,
+                                  tamperedFeatureTitle:
+                                    (selected.features[0]?.name || 'Scope') + ' (Unilateral Change)',
+                                });
+                              }}
+                              className="ui-btn-secondary"
+                            >
+                              Verify Tamper Lock
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenAudit('agreement', selected.id, selected.canonicalPayload)
+                              }
+                              className="ui-btn-secondary"
+                            >
+                              Audit Hash
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Contracting Parties */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                      <div className="p-4 border border-zinc-200 rounded-lg space-y-1.5">
+                        <div className="flex items-center justify-between text-zinc-500">
+                          <span>Gig Provider (Client)</span>
+                          <span className={`ui-badge ${tierMeta(selected.clientTier).badge}`}>
+                            {tierMeta(selected.clientTier).label}
+                          </span>
+                        </div>
+                        <div className="font-semibold text-sm text-zinc-900">
+                          {selected.clientName}
+                        </div>
+                        <div className="font-mono text-[11px] text-zinc-500 truncate">
+                          {selected.clientDid}
+                        </div>
+                        <div className="pt-2 border-t border-zinc-100">
+                          {selected.clientSignature ? (
+                            <span className="text-emerald-700 font-mono text-[11px] flex items-center gap-1">
+                              <Check className="w-3.5 h-3.5" />
+                              Signed ({shortHex(selected.clientSignature, 10, 6)})
+                            </span>
+                          ) : (
+                            <span className="text-amber-700 flex items-center gap-1 text-[11px]">
+                              <Clock className="w-3.5 h-3.5" />
+                              Pending signature
+                            </span>
                           )}
                         </div>
                       </div>
 
-                      {ms.deliverableHash && (
-                        <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs space-y-1">
-                          <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] text-slate-600">
-                            <span className="flex items-center gap-1 font-semibold text-indigo-700">
-                              <GitCommit className="w-3.5 h-3.5" />
-                              Commit: {shortHex(ms.commitHash, 10, 6)}
+                      <div className="p-4 border border-zinc-200 rounded-lg space-y-1.5">
+                        <div className="flex items-center justify-between text-zinc-500">
+                          <span>Freelancer</span>
+                          <span className="ui-badge bg-zinc-100 text-zinc-700 border-zinc-200">
+                            DID Verified
+                          </span>
+                        </div>
+                        <div className="font-semibold text-sm text-zinc-900">
+                          {selected.freelancerName}
+                        </div>
+                        <div className="font-mono text-[11px] text-zinc-500 truncate">
+                          {selected.freelancerDid}
+                        </div>
+                        <div className="pt-2 border-t border-zinc-100">
+                          {selected.freelancerSignature ? (
+                            <span className="text-emerald-700 font-mono text-[11px] flex items-center gap-1">
+                              <Check className="w-3.5 h-3.5" />
+                              Signed ({shortHex(selected.freelancerSignature, 10, 6)})
                             </span>
-                            <span>IPFS CID: {shortHex(ms.evidenceCid, 14, 6)}</span>
-                            {ms.blockNumber && (
-                              <span className="text-emerald-700">
-                                Verified Block #{ms.blockNumber}
-                              </span>
-                            )}
-                          </div>
-                          {ms.evidenceNotes && (
-                            <p className="text-slate-600">{ms.evidenceNotes}</p>
+                          ) : (
+                            <span className="text-amber-700 flex items-center gap-1 text-[11px]">
+                              <Clock className="w-3.5 h-3.5" />
+                              Pending signature
+                            </span>
                           )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Commercial & Timeline Summary */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 py-4 border-y border-zinc-200 text-xs">
+                      <div>
+                        <div className="text-zinc-500">Total compensation</div>
+                        <div className="text-base font-semibold text-zinc-900 tabular-nums mt-0.5">
+                          {formatCurrency(selected.totalCost, selected.currency)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-zinc-500">Start date</div>
+                        <div className="font-mono font-medium text-zinc-900 mt-1">
+                          {selected.startDate}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-zinc-500">Deadline</div>
+                        <div className="font-mono font-medium text-zinc-900 mt-1">
+                          {selected.deadline}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-zinc-500">Duration</div>
+                        <div className="font-medium text-zinc-900 mt-1 tabular-nums">
+                          {selected.durationDays} days
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Features Table */}
+                    <div className="space-y-2">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                        Agreed Features &amp; Acceptance Criteria
+                      </h3>
+                      <div className="border border-zinc-200 rounded-lg divide-y divide-zinc-200 text-xs">
+                        {selected.features.map((f, idx) => (
+                          <div key={idx} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                            <div>
+                              <span className="font-medium text-zinc-900">
+                                {idx + 1}. {f.name}
+                              </span>
+                              {f.description && (
+                                <span className="text-zinc-500 ml-2">— {f.description}</span>
+                              )}
+                            </div>
+                            <span className="text-zinc-500 shrink-0">{f.acceptanceCriteria}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Cryptographic Record */}
+                    <div className="p-4 rounded-lg bg-zinc-950 text-zinc-300 font-mono text-xs space-y-1">
+                      <div className="flex items-center gap-1.5 text-zinc-100 font-sans font-medium mb-1">
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>On-Chain Cryptographic Record</span>
+                      </div>
+                      <div className="truncate">Agreement ID: {selected.id}</div>
+                      <div className="truncate">Keccak-256 Hash: {selected.termsHash}</div>
+                      <div className="truncate">IPFS Payload CID: {selected.ipfsCid}</div>
+                      {selected.txHash && (
+                        <div className="truncate text-emerald-400">
+                          Block #{selected.blockNumber} · Tx {selected.txHash}
                         </div>
                       )}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                  </div>
+                )}
 
-            {/* WORKSPACE DISCUSSION & ACTIVITY THREAD */}
-            <div className="tw-card p-5 space-y-3">
-              <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
-                <MessageSquare className="w-4 h-4 text-indigo-600" />
-                <span>Contract Workspace Chat &amp; Audit Log</span>
-              </div>
-
-              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
-                {workspaceMessages.length === 0 ? (
-                  <p className="text-xs text-slate-400">
-                    No messages yet. Discuss scope details, deliverables, or contract changes here.
-                  </p>
-                ) : (
-                  workspaceMessages.map((m) => (
-                    <div
-                      key={m.id}
-                      className={`p-3 rounded-xl text-xs ${
-                        m.messageType === 'SYSTEM'
-                          ? 'bg-indigo-50/70 border border-indigo-100 text-indigo-900'
-                          : 'bg-slate-50 border border-slate-200 text-slate-800'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between text-[11px] text-slate-500 mb-0.5">
-                        <span className="font-bold text-slate-800">
-                          {m.messageType === 'SYSTEM' ? '⚡ Blockchain Event' : m.senderName}
-                        </span>
-                        <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                {subView === 'milestones' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-zinc-900">
+                          Milestones &amp; Deliverable Sign-Off
+                        </h3>
+                        <p className="text-xs text-zinc-500">
+                          Submit repository commits as the freelancer; approve deliverables as the client.
+                        </p>
                       </div>
-                      <p>{m.body}</p>
+
+                      {(selected.status === 'ACTIVE' || selected.status === 'COMPLETED') && (
+                        existingVc ? (
+                          <button
+                            type="button"
+                            onClick={() => onNavigate('reputation')}
+                            className="ui-btn-secondary"
+                          >
+                            View Issued Credential
+                          </button>
+                        ) : (
+                          selected.clientDid === currentUser?.did && (
+                            <button
+                              type="button"
+                              onClick={() => setIssueVcModal(true)}
+                              className="ui-btn-primary"
+                            >
+                              Issue Verified Credential
+                            </button>
+                          )
+                        )
+                      )}
                     </div>
-                  ))
+
+                    {selected.milestones?.length === 0 ? (
+                      <div className="p-6 border border-dashed border-zinc-300 rounded-lg text-xs text-zinc-500 text-center">
+                        Milestones activate once both parties co-sign this agreement onto the blockchain.
+                      </div>
+                    ) : (
+                      <div className="border border-zinc-200 rounded-lg divide-y divide-zinc-200">
+                        {selected.milestones.map((ms) => (
+                          <div key={ms.id} className="p-4 space-y-2.5 text-xs">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-zinc-900">{ms.title}</span>
+                                  <span
+                                    className={`ui-badge ${
+                                      ms.status === 'VERIFIED_ONCHAIN'
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                        : ms.status === 'EVIDENCE_SUBMITTED'
+                                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                          : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                                    }`}
+                                  >
+                                    {ms.status === 'VERIFIED_ONCHAIN'
+                                      ? 'Approved On-Chain'
+                                      : ms.status === 'EVIDENCE_SUBMITTED'
+                                        ? 'Submitted for Review'
+                                        : 'Pending'}
+                                  </span>
+                                </div>
+                                <div className="text-zinc-500 mt-0.5">
+                                  {ms.deliverables} · Due {ms.dueDate}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                <span className="font-semibold tabular-nums text-zinc-900">
+                                  {formatCurrency(ms.amount, selected.currency)}
+                                </span>
+
+                                {ms.status === 'PENDING' &&
+                                  selected.status === 'ACTIVE' &&
+                                  selected.freelancerDid === currentUser?.did && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setEvidenceModalMs(ms)}
+                                      className="ui-btn-primary py-1 px-2.5 text-xs"
+                                    >
+                                      Submit Deliverable
+                                    </button>
+                                  )}
+
+                                {ms.status === 'EVIDENCE_SUBMITTED' &&
+                                  selected.status === 'ACTIVE' &&
+                                  selected.clientDid === currentUser?.did && (
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => handleMilestoneSignOff(ms)}
+                                      className="ui-btn-primary py-1 px-2.5 text-xs"
+                                    >
+                                      Approve &amp; Sign Off
+                                    </button>
+                                  )}
+                              </div>
+                            </div>
+
+                            {ms.deliverableHash && (
+                              <div className="p-3 rounded bg-zinc-50 border border-zinc-200 space-y-1">
+                                <div className="font-mono text-[11px] text-zinc-600 flex flex-wrap gap-4">
+                                  <span>Commit: {shortHex(ms.commitHash, 10, 6)}</span>
+                                  <span>IPFS: {shortHex(ms.evidenceCid, 14, 6)}</span>
+                                  {ms.blockNumber && <span>Block #{ms.blockNumber}</span>}
+                                </div>
+                                {ms.evidenceNotes && (
+                                  <div className="text-zinc-700">{ms.evidenceNotes}</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {subView === 'messages' && (
+                  <div className="flex flex-col h-[420px] border border-zinc-200 rounded-lg overflow-hidden">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-zinc-50/40">
+                      {workspaceMessages.length === 0 ? (
+                        <div className="text-xs text-zinc-400 text-center pt-12">
+                          Start a conversation with your counterparty. Messages sync live across browsers.
+                        </div>
+                      ) : (
+                        workspaceMessages.map((m) => (
+                          <div
+                            key={m.id}
+                            className={`p-3 rounded-lg text-xs border ${
+                              m.messageType === 'SYSTEM'
+                                ? 'bg-zinc-100 border-zinc-200 text-zinc-700'
+                                : m.senderDid === currentUser?.did
+                                  ? 'bg-zinc-900 border-zinc-900 text-white ml-12'
+                                  : 'bg-white border-zinc-200 text-zinc-900 mr-12'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between text-[11px] opacity-70 mb-1">
+                              <span className="font-medium">
+                                {m.messageType === 'SYSTEM' ? 'System Log' : m.senderName}
+                              </span>
+                              <span>
+                                {new Date(m.createdAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                            </div>
+                            <div>{m.body}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <form
+                      onSubmit={handleSendChat}
+                      className="p-3 bg-white border-t border-zinc-200 flex gap-2"
+                    >
+                      <input
+                        type="text"
+                        placeholder="Write a message..."
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        className="ui-input"
+                      />
+                      <button type="submit" className="ui-btn-primary flex items-center gap-1.5">
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Send</span>
+                      </button>
+                    </form>
+                  </div>
                 )}
               </div>
-
-              <form onSubmit={handleSendChat} className="flex gap-2 pt-1">
-                <input
-                  type="text"
-                  placeholder={`Message as ${currentUser?.name}...`}
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  className="tw-input text-xs"
-                />
-                <button
-                  type="submit"
-                  className="tw-btn-primary px-4 py-2 text-xs flex items-center gap-1 shrink-0"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Send</span>
-                </button>
-              </form>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
-      {/* Create OR Modify Digital Agreement Modal */}
-      {(createModalOpen || amendTarget) && (
+      {(createOpen || amendTarget) && (
         <DigitalAgreementModal
           mode={amendTarget ? 'amend' : 'create'}
           parentAgreement={amendTarget}
@@ -955,12 +851,12 @@ export default function ContractsWorkspaceTab({
           identities={identities}
           currentUser={currentUser}
           onClose={() => {
-            setCreateModalOpen(false);
+            setCreateOpen(false);
             setAmendTarget(null);
             clearDirectHirePrefill?.();
           }}
           onSuccess={async (newId, msg) => {
-            setCreateModalOpen(false);
+            setCreateOpen(false);
             setAmendTarget(null);
             clearDirectHirePrefill?.();
             await onRefresh();
@@ -971,149 +867,120 @@ export default function ContractsWorkspaceTab({
         />
       )}
 
-      {/* Submit Deliverable Modal */}
-      {evidenceModalMs && selected && (
+      {evidenceModalMs && (
         <DeliverableModal
           milestone={evidenceModalMs}
-          currentUser={currentUser}
           onClose={() => setEvidenceModalMs(null)}
           onSubmitted={async () => {
             setEvidenceModalMs(null);
             await onRefresh();
-            showToast(
-              `Deliverable proof pinned to IPFS & signed! Waiting for ${selected.clientName} to approve.`
-            );
+            showToast('Deliverable submitted for client sign-off.');
           }}
           showToast={showToast}
         />
       )}
 
-      {/* Issue Credential Modal */}
       {issueVcModal && selected && (
         <IssueVcModal
           agreement={selected}
-          currentUser={currentUser}
           onClose={() => setIssueVcModal(false)}
           onIssued={async () => {
             setIssueVcModal(false);
             await onRefresh();
-            showToast('Verified Work Credential anchored on blockchain!');
+            showToast('W3C Verifiable Credential anchored on-chain.');
             onNavigate('reputation');
           }}
           showToast={showToast}
         />
       )}
 
-      {/* Unilateral Tamper Protection Simulator Modal */}
+      {cryptoPrompt && (
+        <CryptoSignModal
+          title={cryptoPrompt.title}
+          subtitle={cryptoPrompt.subtitle}
+          termsHash={cryptoPrompt.termsHash}
+          signingDigest={cryptoPrompt.signingDigest}
+          signerUser={currentUser}
+          onCancel={() => setCryptoPrompt(null)}
+          onSigned={cryptoPrompt.onSigned}
+        />
+      )}
+
       {tamperModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="tw-card max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between border-b border-slate-200 pb-3">
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white border border-zinc-200 rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-start justify-between border-b border-zinc-200 pb-3">
               <div>
-                <span className="text-xs font-bold text-rose-600 uppercase">
-                  Blockchain Tamper Protection Test
-                </span>
-                <h3 className="font-bold text-lg text-slate-900 mt-0.5">
-                  Try Modifying Time, Cost, or Features as One Party Alone
+                <h3 className="text-base font-semibold text-zinc-900">
+                  Test Unilateral Modification Lock
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  See what happens if either the Gig Provider or Freelancer tries to alter the agreement without the other party&apos;s cryptographic signature.
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Attempt to alter cost, deadline, or scope without the counterparty&apos;s signature.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setTamperModal(null)}
-                className="tw-btn-secondary px-3 py-1 text-xs"
+                className="ui-btn-secondary py-1 px-2.5 text-xs"
               >
                 Close
               </button>
             </div>
 
             <form onSubmit={runTamperTest} className="space-y-3 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Single Party Acting Alone</label>
-                  <select
-                    value={tamperModal.attackerDid}
-                    onChange={(e) =>
-                      setTamperModal({ ...tamperModal, attackerDid: e.target.value })
-                    }
-                    className="tw-input text-xs"
-                  >
-                    <option value={tamperModal.agreement.clientDid}>
-                      Gig Provider ({tamperModal.agreement.clientName.split('(')[0]})
-                    </option>
-                    <option value={tamperModal.agreement.freelancerDid}>
-                      Freelancer ({tamperModal.agreement.freelancerName})
-                    </option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Altered Price</label>
+                  <label className="block font-medium text-zinc-700 mb-1">Altered Cost</label>
                   <input
                     type="number"
                     value={tamperModal.tamperedCost}
                     onChange={(e) =>
                       setTamperModal({ ...tamperModal, tamperedCost: e.target.value })
                     }
-                    className="tw-input text-xs font-mono"
+                    className="ui-input tabular-nums"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Altered Deadline</label>
+                  <label className="block font-medium text-zinc-700 mb-1">Altered Deadline</label>
                   <input
                     type="date"
                     value={tamperModal.tamperedDeadline}
                     onChange={(e) =>
                       setTamperModal({ ...tamperModal, tamperedDeadline: e.target.value })
                     }
-                    className="tw-input text-xs font-mono"
+                    className="ui-input font-mono"
                   />
                 </div>
               </div>
-
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Altered Feature Scope</label>
+                <label className="block font-medium text-zinc-700 mb-1">Altered Feature</label>
                 <input
                   type="text"
                   value={tamperModal.tamperedFeatureTitle}
                   onChange={(e) =>
                     setTamperModal({ ...tamperModal, tamperedFeatureTitle: e.target.value })
                   }
-                  className="tw-input text-xs"
+                  className="ui-input"
                 />
               </div>
-
-              <button
-                type="submit"
-                disabled={busy}
-                className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs cursor-pointer"
-              >
-                {busy ? 'Testing Smart Contract...' : 'Attempt Unilateral Modification'}
+              <button type="submit" disabled={busy} className="ui-btn-primary w-full py-2">
+                {busy ? 'Checking Smart Contract...' : 'Attempt Unilateral Update'}
               </button>
             </form>
 
             {tamperResult && (
-              <div className="rounded-xl bg-slate-900 text-slate-100 p-4 text-xs space-y-2 font-mono">
-                <div className="flex items-center gap-2 text-rose-400 font-sans font-bold text-sm">
-                  <XCircle className="w-5 h-5 shrink-0" />
-                  <span>Unilateral Modification Blocked by Smart Contract!</span>
+              <div className="p-4 rounded-lg bg-zinc-950 text-zinc-200 font-mono text-xs space-y-1.5">
+                <div className="text-red-400 font-sans font-semibold">
+                  Rejected by Smart Contract
                 </div>
-                <div className="break-all">
-                  <span className="text-slate-400">On-Chain Hash: </span>
-                  <span className="text-emerald-400">{tamperResult.originalTermsHash}</span>
+                <div className="break-all text-zinc-400">
+                  Anchored: <span className="text-emerald-400">{tamperResult.originalTermsHash}</span>
                 </div>
-                <div className="break-all">
-                  <span className="text-slate-400">Tampered Hash: </span>
-                  <span className="text-rose-400">{tamperResult.tamperedTermsHash}</span>
+                <div className="break-all text-zinc-400">
+                  Tampered: <span className="text-red-400">{tamperResult.tamperedTermsHash}</span>
                 </div>
-                <div>
-                  <span className="text-slate-400">Blockchain Response: </span>
-                  <span className="text-amber-300 font-semibold">
-                    {tamperResult.evmContractResponse}
-                  </span>
-                </div>
-                <p className="font-sans text-slate-300 pt-2 border-t border-slate-700">
+                <div className="text-amber-300">{tamperResult.evmContractResponse}</div>
+                <p className="font-sans text-zinc-400 pt-2 border-t border-zinc-800">
                   {tamperResult.explanation}
                 </p>
               </div>
@@ -1136,54 +1003,34 @@ function DigitalAgreementModal({
   showToast,
 }) {
   const isAmend = mode === 'amend' && parentAgreement;
+  const counterparties = identities.filter((u) => u.did !== currentUser?.did);
 
-  const initialClientDid = isAmend ? parentAgreement.clientDid : currentUser?.did;
-  const initialFreelancerDid = isAmend
-    ? parentAgreement.freelancerDid
-    : prefillFreelancer?.did ||
-      identities.find((i) => i.did !== initialClientDid)?.did ||
-      identities[0]?.did;
-
-  const [clientDid, setClientDid] = useState(initialClientDid);
-  const [freelancerDid, setFreelancerDid] = useState(initialFreelancerDid);
-  const [title, setTitle] = useState(
-    isAmend ? parentAgreement.title : 'Full-Stack Customer Portal & Analytics API'
+  const [myRole, setMyRole] = useState('CLIENT');
+  const [counterpartyDid, setCounterpartyDid] = useState(
+    prefillFreelancer?.did || counterparties[0]?.did || ''
   );
-  const [summary, setSummary] = useState(
-    isAmend
-      ? parentAgreement.summary
-      : 'Design, build, and deploy a responsive customer portal with role-based permissions and real-time billing webhooks.'
-  );
+  const [title, setTitle] = useState(isAmend ? parentAgreement.title : '');
+  const [summary, setSummary] = useState(isAmend ? parentAgreement.summary : '');
   const [category, setCategory] = useState(
-    isAmend ? parentAgreement.category : 'Full-Stack Development'
+    isAmend ? parentAgreement.category : 'Software Development'
   );
   const [startDate, setStartDate] = useState(
     isAmend ? parentAgreement.startDate : new Date().toISOString().slice(0, 10)
   );
-  const [deadline, setDeadline] = useState(isAmend ? parentAgreement.deadline : '2026-12-28');
-  const [durationDays, setDurationDays] = useState(isAmend ? parentAgreement.durationDays : 30);
-  const [totalCost, setTotalCost] = useState(isAmend ? parentAgreement.totalCost : 360000);
-  const [currency, setCurrency] = useState(isAmend ? parentAgreement.currency : 'INR');
-  const [paymentSchedule, setPaymentSchedule] = useState(
-    isAmend ? parentAgreement.paymentSchedule : 'Milestone-Based'
+  const [deadline, setDeadline] = useState(
+    isAmend
+      ? parentAgreement.deadline
+      : new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10)
   );
+  const [durationDays, setDurationDays] = useState(isAmend ? parentAgreement.durationDays : 21);
+  const [totalCost, setTotalCost] = useState(isAmend ? parentAgreement.totalCost : 100000);
+  const [currency, setCurrency] = useState(isAmend ? parentAgreement.currency : 'INR');
   const [amendmentReason, setAmendmentReason] = useState('');
 
   const [features, setFeatures] = useState(
     isAmend
       ? parentAgreement.features
-      : [
-          {
-            name: 'Authentication & Role-Based Dashboard',
-            description: 'SSO + granular team permissions',
-            acceptanceCriteria: 'Passes E2E auth test suite',
-          },
-          {
-            name: 'Billing & Webhook Integration',
-            description: 'Automated invoice & usage tracking',
-            acceptanceCriteria: 'Zero failed webhook retries',
-          },
-        ]
+      : [{ name: '', description: '', acceptanceCriteria: 'Meets agreed specification' }]
   );
 
   const [milestones, setMilestones] = useState(
@@ -1191,134 +1038,108 @@ function DigitalAgreementModal({
       ? parentAgreement.milestonesSpec
       : [
           {
-            title: 'Milestone 1: Auth & Core Portal UI',
-            deliverables: 'Frontend + API endpoints',
-            dueDate: '2026-12-14',
-            amount: 180000,
-          },
-          {
-            title: 'Milestone 2: Billing Engine & Production Launch',
-            deliverables: 'Deployed production app + tests',
-            dueDate: '2026-12-28',
-            amount: 180000,
+            title: 'Milestone 1: Delivery',
+            deliverables: 'Source code and verification',
+            dueDate: new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10),
+            amount: 100000,
           },
         ]
   );
 
-  const [submitting, setSubmitting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [preparedSign, setPreparedSign] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setSubmitting(true);
+    setBusy(true);
     try {
-      const proposerDid =
-        currentUser?.did === clientDid || currentUser?.did === freelancerDid
+      const clientDid = isAmend
+        ? parentAgreement.clientDid
+        : myRole === 'CLIENT'
           ? currentUser.did
-          : clientDid;
+          : counterpartyDid;
+      const freelancerDid = isAmend
+        ? parentAgreement.freelancerDid
+        : myRole === 'CLIENT'
+          ? counterpartyDid
+          : currentUser.did;
+      const nonceSeed = Math.random().toString(36).slice(2, 10);
 
-      if (isAmend) {
-        const res = await apiFetch(`/api/agreements/${parentAgreement.id}/propose-amendment`, {
-          method: 'POST',
-          body: JSON.stringify({
-            proposedByDid: proposerDid,
-            title,
-            summary,
-            category,
-            startDate,
-            deadline,
-            durationDays: Number(durationDays),
-            totalCost: Number(totalCost),
-            currency,
-            paymentSchedule,
-            features,
-            milestones,
-            amendmentReason,
-          }),
-        });
-        await onSuccess(
-          res.newAgreementId,
-          `Modification Proposal (v${res.version}) signed! Both parties must agree — switch to the other party to approve & mint the new agreement on-chain.`
-        );
-      } else {
-        const res = await apiFetch('/api/agreements', {
-          method: 'POST',
-          body: JSON.stringify({
-            title,
-            summary,
-            category,
-            clientDid,
-            freelancerDid,
-            proposedByDid: proposerDid,
-            startDate,
-            deadline,
-            durationDays: Number(durationDays),
-            totalCost: Number(totalCost),
-            currency,
-            paymentSchedule,
-            features,
-            milestones,
-          }),
-        });
-        await onSuccess(
-          res.agreementId,
-          `Digital Agreement v1 created & signed by you! Waiting for the other party to co-sign to lock on blockchain.`
-        );
-      }
+      const prep = await apiFetch('/api/agreements/prepare', {
+        method: 'POST',
+        body: JSON.stringify({
+          parentAgreementId: isAmend ? parentAgreement.id : null,
+          title,
+          summary,
+          category,
+          clientDid,
+          freelancerDid,
+          startDate,
+          deadline,
+          durationDays: Number(durationDays),
+          totalCost: Number(totalCost),
+          currency,
+          paymentSchedule: 'Milestone-Based',
+          features,
+          milestones,
+          amendmentReason,
+          nonceSeed,
+        }),
+      });
+
+      setPreparedSign({ prep, clientDid, freelancerDid, nonceSeed });
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="tw-card max-w-3xl w-full max-h-[92vh] overflow-y-auto p-6 space-y-4">
-        <div className="flex items-start justify-between border-b border-slate-200 pb-3">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white border border-zinc-200 rounded-lg shadow-xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-6 space-y-4">
+        <div className="flex items-start justify-between border-b border-zinc-200 pb-3">
           <div>
-            <span className="text-xs font-bold text-indigo-600 uppercase">
+            <h3 className="text-base font-semibold text-zinc-900">
               {isAmend
-                ? `Mutual Modification · Agreement v${parentAgreement.version} ➔ v${parentAgreement.version + 1}`
-                : 'Dual-Party Blockchain Digital Agreement'}
-            </span>
-            <h3 className="text-lg font-bold text-slate-900 mt-0.5">
-              {isAmend
-                ? 'Propose Updated Time, Cost, or Features (Requires Both Signatures)'
-                : 'Agree on Timeline, Cost, Features & Milestones'}
+                ? `Modify Agreement (v${parentAgreement.version} → v${parentAgreement.version + 1})`
+                : 'New Digital Agreement'}
             </h3>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              {isAmend
+                ? 'Current version stays active until the counterparty co-signs this modification.'
+                : 'Both parties must sign before the agreement is anchored on-chain.'}
+            </p>
           </div>
-          <button type="button" onClick={onClose} className="tw-btn-secondary px-3 py-1.5 text-xs">
+          <button type="button" onClick={onClose} className="ui-btn-secondary py-1 px-2.5 text-xs">
             Cancel
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           {!isAmend && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Gig Provider (Client)</label>
+                <label className="block font-medium text-zinc-700 mb-1">Your role</label>
                 <select
-                  value={clientDid}
-                  onChange={(e) => setClientDid(e.target.value)}
-                  className="tw-input text-xs"
+                  value={myRole}
+                  onChange={(e) => setMyRole(e.target.value)}
+                  className="ui-input"
                 >
-                  {identities.map((u) => (
-                    <option key={u.did} value={u.did}>
-                      {u.name}
-                    </option>
-                  ))}
+                  <option value="CLIENT">Gig Provider (Hiring)</option>
+                  <option value="FREELANCER">Freelancer (Delivering)</option>
                 </select>
               </div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Freelancer</label>
+                <label className="block font-medium text-zinc-700 mb-1">Counterparty</label>
                 <select
-                  value={freelancerDid}
-                  onChange={(e) => setFreelancerDid(e.target.value)}
-                  className="tw-input text-xs"
+                  value={counterpartyDid}
+                  onChange={(e) => setCounterpartyDid(e.target.value)}
+                  className="ui-input"
                 >
-                  {identities.map((u) => (
+                  {counterparties.map((u) => (
                     <option key={u.did} value={u.did}>
-                      {u.name} ({u.headline})
+                      {u.name} ({u.email})
                     </option>
                   ))}
                 </select>
@@ -1327,149 +1148,151 @@ function DigitalAgreementModal({
           )}
 
           {isAmend && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-              <label className="block font-semibold text-amber-900 mb-1">
-                What is changing and why? (Shown to counterparty for co-signing)
+            <div>
+              <label className="block font-medium text-zinc-700 mb-1">
+                Reason for modification
               </label>
               <input
                 type="text"
                 required
-                placeholder="e.g. Adding mobile push notifications (+₹80,000 and +10 days)"
+                placeholder="Summarize changes to timeline, cost, or features..."
                 value={amendmentReason}
                 onChange={(e) => setAmendmentReason(e.target.value)}
-                className="tw-input text-xs"
+                className="ui-input"
               />
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="sm:col-span-2">
-              <label className="block font-semibold text-slate-700 mb-1">Project Title</label>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <label className="block font-medium text-zinc-700 mb-1">Agreement title</label>
               <input
                 type="text"
                 required
+                placeholder="Project name"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="tw-input text-xs"
+                className="ui-input"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Category</label>
+              <label className="block font-medium text-zinc-700 mb-1">Category</label>
               <input
                 type="text"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="tw-input text-xs"
+                className="ui-input"
               />
             </div>
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Agreement Summary</label>
+            <label className="block font-medium text-zinc-700 mb-1">Scope summary</label>
             <textarea
               rows={2}
+              required
+              placeholder="Overview of deliverables and expectations..."
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
-              className="tw-input text-xs"
+              className="ui-input"
             />
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Start Date</label>
+              <label className="block font-medium text-zinc-700 mb-1">Start</label>
               <input
                 type="date"
                 required
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input font-mono"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Deadline</label>
+              <label className="block font-medium text-zinc-700 mb-1">Deadline</label>
               <input
                 type="date"
                 required
                 value={deadline}
                 onChange={(e) => setDeadline(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input font-mono"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Duration (Days)</label>
+              <label className="block font-medium text-zinc-700 mb-1">Days</label>
               <input
                 type="number"
                 required
                 value={durationDays}
                 onChange={(e) => setDurationDays(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input tabular-nums"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Total Price</label>
+              <label className="block font-medium text-zinc-700 mb-1">Total cost</label>
               <input
                 type="number"
                 required
                 value={totalCost}
                 onChange={(e) => setTotalCost(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input tabular-nums"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Currency</label>
+              <label className="block font-medium text-zinc-700 mb-1">Currency</label>
               <select
                 value={currency}
                 onChange={(e) => setCurrency(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input"
               >
-                <option value="INR">INR (₹)</option>
-                <option value="USD">USD ($)</option>
+                <option value="INR">INR</option>
+                <option value="USD">USD</option>
                 <option value="ETH">ETH</option>
               </select>
             </div>
           </div>
 
-          {/* Features */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+          <div className="border border-zinc-200 rounded-lg p-3.5 bg-zinc-50/50 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-700">Agreed Features &amp; Acceptance Criteria</span>
+              <span className="font-medium text-zinc-800">Features</span>
               <button
                 type="button"
                 onClick={() =>
                   setFeatures([
                     ...features,
-                    { name: '', description: '', acceptanceCriteria: 'Verified by client' },
+                    { name: '', description: '', acceptanceCriteria: 'Meets specification' },
                   ])
                 }
-                className="text-indigo-600 font-semibold hover:underline cursor-pointer"
+                className="text-zinc-900 underline cursor-pointer"
               >
-                + Add Feature
+                + Add feature
               </button>
             </div>
             {features.map((f, idx) => (
-              <div key={idx} className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div key={idx} className="grid grid-cols-3 gap-2">
                 <input
                   type="text"
                   required
-                  placeholder="Feature name"
+                  placeholder="Feature"
                   value={f.name}
                   onChange={(e) => {
                     const next = [...features];
                     next[idx] = { ...next[idx], name: e.target.value };
                     setFeatures(next);
                   }}
-                  className="tw-input text-xs"
+                  className="ui-input"
                 />
                 <input
                   type="text"
-                  placeholder="Details"
+                  placeholder="Description"
                   value={f.description}
                   onChange={(e) => {
                     const next = [...features];
                     next[idx] = { ...next[idx], description: e.target.value };
                     setFeatures(next);
                   }}
-                  className="tw-input text-xs"
+                  className="ui-input"
                 />
                 <input
                   type="text"
@@ -1480,16 +1303,15 @@ function DigitalAgreementModal({
                     next[idx] = { ...next[idx], acceptanceCriteria: e.target.value };
                     setFeatures(next);
                   }}
-                  className="tw-input text-xs"
+                  className="ui-input"
                 />
               </div>
             ))}
           </div>
 
-          {/* Milestones */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+          <div className="border border-zinc-200 rounded-lg p-3.5 bg-zinc-50/50 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-700">Milestones &amp; Payouts</span>
+              <span className="font-medium text-zinc-800">Milestones</span>
               <button
                 type="button"
                 onClick={() =>
@@ -1497,19 +1319,19 @@ function DigitalAgreementModal({
                     ...milestones,
                     {
                       title: `Milestone ${milestones.length + 1}`,
-                      deliverables: 'Deliverable package',
+                      deliverables: 'Deliverables',
                       dueDate: deadline,
-                      amount: 50000,
+                      amount: 25000,
                     },
                   ])
                 }
-                className="text-indigo-600 font-semibold hover:underline cursor-pointer"
+                className="text-zinc-900 underline cursor-pointer"
               >
-                + Add Milestone
+                + Add milestone
               </button>
             </div>
             {milestones.map((m, idx) => (
-              <div key={idx} className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+              <div key={idx} className="grid grid-cols-4 gap-2">
                 <input
                   type="text"
                   required
@@ -1519,8 +1341,7 @@ function DigitalAgreementModal({
                     next[idx] = { ...next[idx], title: e.target.value };
                     setMilestones(next);
                   }}
-                  className="tw-input text-xs"
-                  placeholder="Title"
+                  className="ui-input"
                 />
                 <input
                   type="text"
@@ -1531,8 +1352,7 @@ function DigitalAgreementModal({
                     next[idx] = { ...next[idx], deliverables: e.target.value };
                     setMilestones(next);
                   }}
-                  className="tw-input text-xs"
-                  placeholder="Deliverables"
+                  className="ui-input"
                 />
                 <input
                   type="date"
@@ -1543,7 +1363,7 @@ function DigitalAgreementModal({
                     next[idx] = { ...next[idx], dueDate: e.target.value };
                     setMilestones(next);
                   }}
-                  className="tw-input text-xs font-mono"
+                  className="ui-input font-mono"
                 />
                 <input
                   type="number"
@@ -1554,40 +1374,104 @@ function DigitalAgreementModal({
                     next[idx] = { ...next[idx], amount: Number(e.target.value) };
                     setMilestones(next);
                   }}
-                  className="tw-input text-xs font-mono"
+                  className="ui-input tabular-nums"
                 />
               </div>
             ))}
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="tw-btn-secondary px-4 py-2 text-xs">
+            <button type="button" onClick={onClose} className="ui-btn-secondary">
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="tw-btn-primary px-5 py-2 text-xs"
-            >
-              {submitting
-                ? 'Signing...'
+            <button type="submit" disabled={busy} className="ui-btn-primary">
+              {busy
+                ? 'Preparing Hash...'
                 : isAmend
-                  ? `Sign & Send Modification Request (v${parentAgreement.version + 1})`
-                  : 'Sign & Send Digital Agreement'}
+                  ? 'Hash & Sign Modification'
+                  : 'Hash & Sign Agreement'}
             </button>
           </div>
         </form>
+
+        {preparedSign && (
+          <CryptoSignModal
+            title={
+              isAmend
+                ? `Sign Modification Proposal v${parentAgreement.version + 1}`
+                : 'Sign Digital Agreement v1'
+            }
+            subtitle="Sign the Keccak-256 payload hash with your Private Signing Key."
+            termsHash={preparedSign.prep.termsHash}
+            signingDigest={preparedSign.prep.signingDigest}
+            signerUser={currentUser}
+            onCancel={() => setPreparedSign(null)}
+            onSigned={async (signatureHex) => {
+              if (isAmend) {
+                const res = await apiFetch(
+                  `/api/agreements/${parentAgreement.id}/propose-amendment`,
+                  {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      title,
+                      summary,
+                      category,
+                      startDate,
+                      deadline,
+                      durationDays: Number(durationDays),
+                      totalCost: Number(totalCost),
+                      currency,
+                      features,
+                      milestones,
+                      amendmentReason,
+                      proposerSignature: signatureHex,
+                      agreementIdOverride: preparedSign.prep.agreementId,
+                      nonceSeed: preparedSign.nonceSeed,
+                    }),
+                  }
+                );
+                await onSuccess(
+                  res.newAgreementId,
+                  `Modification request v${res.version} signed with your Private Key and sent to counterparty.`
+                );
+              } else {
+                const res = await apiFetch('/api/agreements', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    title,
+                    summary,
+                    category,
+                    clientDid: preparedSign.clientDid,
+                    freelancerDid: preparedSign.freelancerDid,
+                    startDate,
+                    deadline,
+                    durationDays: Number(durationDays),
+                    totalCost: Number(totalCost),
+                    currency,
+                    features,
+                    milestones,
+                    proposerSignature: signatureHex,
+                    agreementIdOverride: preparedSign.prep.agreementId,
+                    nonceSeed: preparedSign.nonceSeed,
+                  }),
+                });
+                await onSuccess(
+                  res.agreementId,
+                  'Digital Agreement v1 signed with your Private Key and sent to counterparty.'
+                );
+              }
+            }}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-function DeliverableModal({ milestone, currentUser, onClose, onSubmitted, showToast }) {
-  const [commitHash, setCommitHash] = useState('e49a71c308bf19d4421a87e0c2155b908f12ca19');
-  const [repoUrl, setRepoUrl] = useState('https://github.com/trustwork-builds/project/commit/e49a71c');
-  const [evidenceNotes, setEvidenceNotes] = useState(
-    `Completed ${milestone.title} with full automated tests passing.`
-  );
+function DeliverableModal({ milestone, onClose, onSubmitted, showToast }) {
+  const [commitHash, setCommitHash] = useState('');
+  const [repoUrl, setRepoUrl] = useState('');
+  const [evidenceNotes, setEvidenceNotes] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(e) {
@@ -1596,12 +1480,7 @@ function DeliverableModal({ milestone, currentUser, onClose, onSubmitted, showTo
     try {
       await apiFetch(`/api/milestones/${milestone.id}/submit-evidence`, {
         method: 'POST',
-        body: JSON.stringify({
-          actorDid: currentUser.did,
-          commitHash,
-          repoUrl,
-          evidenceNotes,
-        }),
+        body: JSON.stringify({ commitHash, repoUrl, evidenceNotes }),
       });
       await onSubmitted();
     } catch (err) {
@@ -1612,47 +1491,50 @@ function DeliverableModal({ milestone, currentUser, onClose, onSubmitted, showTo
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="tw-card max-w-lg w-full p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-          <h3 className="font-bold text-base text-slate-900">Submit Milestone Deliverable Proof</h3>
-          <button type="button" onClick={onClose} className="tw-btn-secondary px-3 py-1 text-xs">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white border border-zinc-200 rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
+          <h3 className="text-base font-semibold text-zinc-900">Submit Deliverable</h3>
+          <button type="button" onClick={onClose} className="ui-btn-secondary py-1 px-2.5 text-xs">
             Cancel
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Git Commit Hash</label>
+            <label className="block font-medium text-zinc-700 mb-1">Git commit hash</label>
             <input
               type="text"
               required
+              placeholder="e.g. a84f291c..."
               value={commitHash}
               onChange={(e) => setCommitHash(e.target.value)}
-              className="tw-input font-mono text-xs"
+              className="ui-input font-mono"
             />
           </div>
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Repository / Live Preview Link</label>
+            <label className="block font-medium text-zinc-700 mb-1">Repository / preview URL</label>
             <input
               type="url"
               required
+              placeholder="https://github.com/..."
               value={repoUrl}
               onChange={(e) => setRepoUrl(e.target.value)}
-              className="tw-input text-xs"
+              className="ui-input"
             />
           </div>
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Delivery Notes</label>
+            <label className="block font-medium text-zinc-700 mb-1">Release notes</label>
             <textarea
               rows={3}
               required
+              placeholder="Summary of completed deliverables..."
               value={evidenceNotes}
               onChange={(e) => setEvidenceNotes(e.target.value)}
-              className="tw-input text-xs"
+              className="ui-input"
             />
           </div>
-          <button type="submit" disabled={busy} className="tw-btn-primary w-full py-2.5 text-xs">
-            {busy ? 'Hashing & Signing...' : 'Sign & Submit Deliverable'}
+          <button type="submit" disabled={busy} className="ui-btn-primary w-full py-2">
+            {busy ? 'Submitting...' : 'Sign & Submit'}
           </button>
         </form>
       </div>
@@ -1660,12 +1542,12 @@ function DeliverableModal({ milestone, currentUser, onClose, onSubmitted, showTo
   );
 }
 
-function IssueVcModal({ agreement, currentUser, onClose, onIssued, showToast }) {
-  const [rolePerformed, setRolePerformed] = useState('Lead Freelance Engineer');
+function IssueVcModal({ agreement, onClose, onIssued, showToast }) {
+  const [rolePerformed, setRolePerformed] = useState('Lead Contractor');
   const [summaryStatement, setSummaryStatement] = useState(
-    `${agreement.freelancerName} delivered ${agreement.title} on schedule with verified milestone proofs.`
+    `${agreement.freelancerName} completed ${agreement.title}.`
   );
-  const [skillsText, setSkillsText] = useState('Distributed Systems, Backend, API Design');
+  const [skillsText, setSkillsText] = useState('');
   const [rating, setRating] = useState(5);
   const [busy, setBusy] = useState(false);
 
@@ -1677,7 +1559,6 @@ function IssueVcModal({ agreement, currentUser, onClose, onIssued, showToast }) 
         method: 'POST',
         body: JSON.stringify({
           agreementId: agreement.id,
-          issuerDid: currentUser.did,
           rolePerformed,
           summaryStatement,
           skillsVerified: skillsText
@@ -1696,69 +1577,61 @@ function IssueVcModal({ agreement, currentUser, onClose, onIssued, showToast }) 
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="tw-card max-w-lg w-full p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-          <div>
-            <span className="text-xs font-bold text-indigo-600 uppercase">
-              Portable W3C Verifiable Credential
-            </span>
-            <h3 className="font-bold text-base text-slate-900 mt-0.5">
-              Issue Verified Work Credential to {agreement.freelancerName}
-            </h3>
-          </div>
-          <button type="button" onClick={onClose} className="tw-btn-secondary px-3 py-1 text-xs">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white border border-zinc-200 rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
+          <h3 className="text-base font-semibold text-zinc-900">Issue Verified Credential</h3>
+          <button type="button" onClick={onClose} className="ui-btn-secondary py-1 px-2.5 text-xs">
             Cancel
           </button>
         </div>
-
         <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Role Performed</label>
+            <label className="block font-medium text-zinc-700 mb-1">Role performed</label>
             <input
               type="text"
               required
               value={rolePerformed}
               onChange={(e) => setRolePerformed(e.target.value)}
-              className="tw-input text-xs"
+              className="ui-input"
             />
           </div>
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Client Endorsement Statement</label>
+            <label className="block font-medium text-zinc-700 mb-1">Verification statement</label>
             <textarea
               rows={2}
               required
               value={summaryStatement}
               onChange={(e) => setSummaryStatement(e.target.value)}
-              className="tw-input text-xs"
+              className="ui-input"
             />
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div className="col-span-2">
-              <label className="block font-semibold text-slate-700 mb-1">Verified Skills</label>
+              <label className="block font-medium text-zinc-700 mb-1">Skills verified</label>
               <input
                 type="text"
+                placeholder="TypeScript, Go"
                 value={skillsText}
                 onChange={(e) => setSkillsText(e.target.value)}
-                className="tw-input text-xs"
+                className="ui-input"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Rating</label>
+              <label className="block font-medium text-zinc-700 mb-1">Rating</label>
               <select
                 value={rating}
                 onChange={(e) => setRating(e.target.value)}
-                className="tw-input text-xs"
+                className="ui-input"
               >
-                <option value={5}>5.0 ★</option>
-                <option value={4}>4.0 ★</option>
-                <option value={3}>3.0 ★</option>
+                <option value={5}>5 / 5</option>
+                <option value={4}>4 / 5</option>
+                <option value={3}>3 / 5</option>
               </select>
             </div>
           </div>
-
-          <button type="submit" disabled={busy} className="tw-btn-primary w-full py-2.5 text-xs">
-            {busy ? 'Signing & Anchoring...' : 'Sign & Mint Portable Credential'}
+          <button type="submit" disabled={busy} className="ui-btn-primary w-full py-2">
+            {busy ? 'Anchoring...' : 'Sign & Anchor Credential'}
           </button>
         </form>
       </div>

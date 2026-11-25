@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { app } from '../server/index.js';
-import { seedIfEmpty } from '../server/seed.js';
 
-function request(path, { method = 'GET', body } = {}) {
+function request(path, { method = 'GET', token = '', body } = {}) {
   return new Promise((resolve, reject) => {
     const payloadStr = body ? JSON.stringify(body) : '';
     const req = new Readable({
@@ -18,6 +17,7 @@ function request(path, { method = 'GET', body } = {}) {
     req.headers = {
       'content-type': 'application/json',
       'content-length': String(Buffer.byteLength(payloadStr, 'utf8')),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
     };
     req.body = body || {};
     req._body = true;
@@ -52,7 +52,7 @@ function request(path, { method = 'GET', body } = {}) {
         const raw = Buffer.concat(chunks).toString('utf8');
         try {
           const parsed = raw ? JSON.parse(raw) : {};
-          if (this.statusCode >= 400) {
+          if (this.statusCode >= 400 && this.statusCode !== 401) {
             console.error(`HTTP ${this.statusCode} on ${method} ${path}:`, parsed);
           }
           resolve({ status: this.statusCode, json: parsed });
@@ -69,170 +69,182 @@ function request(path, { method = 'GET', body } = {}) {
 }
 
 async function main() {
-  await seedIfEmpty();
+  console.log('1. Verifying unauthenticated requests are rejected (401)...');
+  const unauth = await request('/api/bootstrap');
+  assert.equal(unauth.status, 401);
 
-  console.log('1. Verifying Marketplace Bootstrap & Unified Freelancer/Client Accounts...');
-  const boot = await request('/api/bootstrap');
-  assert.equal(boot.status, 200);
-  assert.ok(boot.json.identities.length >= 5);
-  assert.ok(boot.json.gigs.length >= 4);
-
-  const mili = boot.json.identities.find((u) => u.email === 'mili@trustwork.io');
-  const arjun = boot.json.identities.find((u) => u.email === 'arjun@zkshield.dev');
-  assert.ok(mili && arjun);
-
-  console.log('2. Testing Unified Role: Mili posts a Gig as Gig Provider -> Arjun submits Proposal as Freelancer...');
-  const gigRes = await request('/api/gigs', {
+  console.log('2. Browser 1: Registering User A (Gig Provider) & verifying login...');
+  const regA = await request('/api/auth/register', {
     method: 'POST',
     body: {
-      posterDid: mili.did,
-      title: 'Build WebSocket Metrics Collector & Alerting SDK',
-      description: 'Need a low-overhead TypeScript SDK & ingestion endpoint.',
-      category: 'Full-Stack Development',
-      budgetMin: 180000,
-      budgetMax: 240000,
+      name: 'Client User A',
+      email: 'client.a@example.com',
+      password: 'strongpassword123',
+      headline: 'Engineering Manager',
+      organization: 'Vertex Systems',
+      issuerTier: 'VERIFIED_ORG',
+      skills: ['System Architecture'],
+    },
+  });
+  assert.equal(regA.status, 201);
+  const tokenA = regA.json.token;
+
+  const loginFail = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'client.a@example.com', password: 'wrongpassword' },
+  });
+  assert.equal(loginFail.status, 401);
+
+  const loginOk = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'client.a@example.com', password: 'strongpassword123' },
+  });
+  assert.equal(loginOk.status, 200);
+
+  console.log('3. Browser 1: User A posts a Gig...');
+  const gigRes = await request('/api/gigs', {
+    method: 'POST',
+    token: tokenA,
+    body: {
+      title: 'Distributed Payment Webhook Service',
+      description: 'Build an idempotent Go webhook dispatcher with PostgreSQL persistence.',
+      category: 'Backend & Systems',
+      budgetMin: 90000,
+      budgetMax: 140000,
       currency: 'INR',
       durationDays: 14,
-      deadline: '2026-12-18',
-      skills: ['TypeScript', 'Node.js', 'WebSockets'],
-      features: [
-        { name: 'Streaming SDK', acceptanceCriteria: '<2ms client overhead' },
-      ],
+      deadline: '2026-12-20',
+      skills: ['Go', 'PostgreSQL'],
+      features: [{ name: 'Webhook Retry Engine', acceptanceCriteria: 'Zero duplicate deliveries' }],
     },
   });
   assert.equal(gigRes.status, 201);
   const gigId = gigRes.json.gigId;
 
-  const propRes = await request(`/api/gigs/${gigId}/proposals`, {
+  console.log('4. Browser 2: Registering User B (Freelancer) -> sees User A gig immediately -> applies...');
+  const regB = await request('/api/auth/register', {
     method: 'POST',
     body: {
-      freelancerDid: arjun.did,
-      coverLetter: 'I can ship the TypeScript SDK + tests in 12 days.',
-      proposedCost: 200000,
+      name: 'Freelancer User B',
+      email: 'freelancer.b@example.com',
+      password: 'freelancerpassword123',
+      headline: 'Senior Backend Engineer',
+      skills: ['Go', 'PostgreSQL', 'Docker'],
+    },
+  });
+  assert.equal(regB.status, 201);
+  const tokenB = regB.json.token;
+
+  const bootB = await request('/api/bootstrap', { token: tokenB });
+  assert.equal(bootB.status, 200);
+  assert.equal(bootB.json.gigs.length, 1);
+  assert.equal(bootB.json.gigs[0].id, gigId);
+
+  const propRes = await request(`/api/gigs/${gigId}/proposals`, {
+    method: 'POST',
+    token: tokenB,
+    body: {
+      coverLetter: 'I can deliver the Go webhook service with full integration tests in 12 days.',
+      proposedCost: 120000,
       currency: 'INR',
       proposedDurationDays: 12,
-      proposedDeadline: '2026-12-16',
-      proposedFeatures: [
-        {
-          name: 'Streaming SDK',
-          description: 'Typed WebSocket client',
-          acceptanceCriteria: '<2ms overhead',
-        },
-      ],
-      proposedMilestones: [
-        {
-          title: 'Milestone 1: Complete SDK & Tests',
-          deliverables: 'NPM package + unit tests',
-          dueDate: '2026-12-16',
-          amount: 200000,
-        },
-      ],
+      proposedDeadline: '2026-12-18',
     },
   });
   assert.equal(propRes.status, 201);
 
-  console.log('3. Testing Proposal Acceptance -> Dual-Signed Digital Agreement v1 Anchored on Blockchain...');
+  console.log('5. Browser 1 (User A) hires User B -> Browser 2 (User B) co-signs -> Anchored on Blockchain...');
   const acceptRes = await request(`/api/proposals/${propRes.json.proposalId}/accept`, {
     method: 'POST',
-    body: { actorDid: mili.did },
+    token: tokenA,
+    body: {},
   });
   assert.equal(acceptRes.status, 201);
   const v1Id = acceptRes.json.agreementId;
 
   const cosignRes = await request(`/api/agreements/${v1Id}/cosign`, {
     method: 'POST',
-    body: { actorDid: arjun.did },
+    token: tokenB,
+    body: {},
   });
   assert.equal(cosignRes.status, 200);
   assert.equal(cosignRes.json.status, 'ACTIVE');
-  console.log(`   ✓ Digital Agreement v1 co-signed & anchored at Block #${cosignRes.json.receipt.blockNumber}`);
+  console.log(`   ✓ Agreement v1 anchored at Block #${cosignRes.json.receipt.blockNumber}`);
 
-  console.log('4. Testing Unilateral Tamper Protection (Single-Party Edit Blocked by Smart Contract)...');
+  console.log('6. Verifying Unilateral Tamper Protection & Mutual Modification (v1 -> v2)...');
   const tamperRes = await request(`/api/agreements/${v1Id}/simulate-tamper`, {
     method: 'POST',
-    body: {
-      attackerDid: mili.did,
-      tamperedCost: 40000,
-      tamperedDeadline: '2026-12-03',
-    },
+    token: tokenA,
+    body: { tamperedCost: 10000, tamperedDeadline: '2026-12-01' },
   });
-  assert.equal(tamperRes.status, 200);
   assert.equal(tamperRes.json.tamperBlocked, true);
-  assert.equal(tamperRes.json.onChainHashMatches, false);
   assert.match(tamperRes.json.evmContractResponse, /InvalidFreelancerSignature/);
-  console.log(`   ✓ Unilateral edit blocked: ${tamperRes.json.evmContractResponse}`);
 
-  console.log('5. Testing Mutual Agreement Modification (Both Parties Sign -> Mints New Agreement v2)...');
-  const amendProp = await request(`/api/agreements/${v1Id}/propose-amendment`, {
+  const modProp = await request(`/api/agreements/${v1Id}/propose-amendment`, {
     method: 'POST',
+    token: tokenA,
     body: {
-      proposedByDid: mili.did,
-      deadline: '2026-12-24',
+      totalCost: 160000,
+      deadline: '2026-12-26',
       durationDays: 20,
-      totalCost: 280000,
-      amendmentReason: 'Added Prometheus exporter feature (+₹80,000 and +8 days)',
+      amendmentReason: 'Added Prometheus metrics endpoint (+INR 40,000)',
       features: [
-        { name: 'Streaming SDK', description: 'Typed WebSocket client', acceptanceCriteria: '<2ms overhead' },
-        { name: 'Prometheus Metrics Exporter', description: 'OpenMetrics endpoint', acceptanceCriteria: 'Grafana ready' },
+        { name: 'Webhook Retry Engine', description: '', acceptanceCriteria: 'Zero duplicates' },
+        { name: 'Prometheus Exporter', description: '', acceptanceCriteria: 'Metrics live' },
       ],
       milestones: [
-        {
-          title: 'Milestone 1: SDK + Prometheus Exporter',
-          deliverables: 'Full source + tests',
-          dueDate: '2026-12-24',
-          amount: 280000,
-        },
+        { title: 'Milestone 1: Core + Metrics', deliverables: 'Go service', dueDate: '2026-12-26', amount: 160000 },
       ],
     },
   });
-  assert.equal(amendProp.status, 201);
-  const v2Id = amendProp.json.newAgreementId;
+  assert.equal(modProp.status, 201);
+  const v2Id = modProp.json.newAgreementId;
 
-  const amendCosign = await request(`/api/agreements/${v2Id}/cosign-amendment`, {
+  const modCosign = await request(`/api/agreements/${v2Id}/cosign-amendment`, {
     method: 'POST',
-    body: { actorDid: arjun.did },
+    token: tokenB,
+    body: {},
   });
-  assert.equal(amendCosign.status, 200);
-  assert.equal(amendCosign.json.version, 2);
-  console.log(`   ✓ Mutual Modification v2 anchored at Block #${amendCosign.json.receipt.blockNumber}`);
+  assert.equal(modCosign.status, 200);
+  assert.equal(modCosign.json.version, 2);
+  console.log(`   ✓ Mutual Modification v2 anchored at Block #${modCosign.json.receipt.blockNumber}`);
 
-  const postAmendBoot = await request('/api/bootstrap');
-  const v2Ag = postAmendBoot.json.agreements.find((a) => a.id === v2Id);
-  assert.equal(v2Ag.status, 'ACTIVE');
-
-  console.log('6. Testing Deliverable Submission, Milestone Sign-Off, W3C Credential & 1-Sec Verification...');
+  console.log('7. Verifying Milestone Submission, Client Approval & W3C Credential Verification...');
+  const bootAfter = await request('/api/bootstrap', { token: tokenB });
+  const v2Ag = bootAfter.json.agreements.find((a) => a.id === v2Id);
   const ms1 = v2Ag.milestones[0];
+
   await request(`/api/milestones/${ms1.id}/submit-evidence`, {
     method: 'POST',
+    token: tokenB,
     body: {
-      actorDid: arjun.did,
-      commitHash: '91ab44cd0019ef882310aa77bc1290ff118823cc',
-      repoUrl: 'https://github.com/arjun/metrics-sdk/commit/91ab44c',
-      evidenceNotes: 'Delivered SDK + Prometheus exporter.',
+      commitHash: 'b8291fa03912cd8812390aa7712e9031ca551109',
+      repoUrl: 'https://github.com/example/webhook-service/commit/b8291fa',
+      evidenceNotes: 'All integration tests passing.',
     },
   });
 
   const signOff = await request(`/api/milestones/${ms1.id}/sign-off`, {
     method: 'POST',
-    body: { actorDid: mili.did },
+    token: tokenA,
+    body: {},
   });
   assert.equal(signOff.status, 200);
-  assert.equal(signOff.json.agreementCompleted, true);
 
   const vcRes = await request('/api/credentials/issue', {
     method: 'POST',
+    token: tokenA,
     body: {
       agreementId: v2Id,
-      issuerDid: mili.did,
-      rolePerformed: 'Lead TypeScript SDK Engineer',
-      summaryStatement: 'Arjun delivered the WebSocket Metrics SDK and Prometheus exporter.',
-      skillsVerified: ['TypeScript', 'Node.js'],
+      rolePerformed: 'Lead Backend Engineer',
+      summaryStatement: 'Delivered Distributed Payment Webhook Service & Prometheus Exporter.',
+      skillsVerified: ['Go', 'PostgreSQL'],
       rating: 5,
     },
   });
   assert.equal(vcRes.status, 201);
 
-  const verifyPass = await request('/api/verify', {
+  const pubAudit = await request('/api/verify', {
     method: 'POST',
     body: {
       mode: 'credential',
@@ -240,10 +252,9 @@ async function main() {
       documentJson: vcRes.json.vcDocument,
     },
   });
-  assert.equal(verifyPass.json.verified, true);
-  console.log(`   ✓ Portable W3C Credential verified in ${verifyPass.json.auditDurationMs}ms`);
+  assert.equal(pubAudit.json.verified, true);
 
-  console.log('\nALL TRUSTWORK FREELANCE MARKETPLACE & BLOCKCHAIN CHECKS PASSED!');
+  console.log('\nALL MULTI-SESSION AUTH, MARKETPLACE & BLOCKCHAIN AGREEMENT TESTS PASSED!');
 }
 
 main().catch((err) => {

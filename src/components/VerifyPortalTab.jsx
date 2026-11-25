@@ -1,16 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import {
-  CheckCircle2,
-  XCircle,
-  RotateCcw,
-  AlertTriangle,
-  ShieldCheck,
-} from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { apiFetch, shortHex } from '../lib/wallet.js';
 
-export default function VerifyPortalTab({ credentials, agreements, presetAudit }) {
+export default function VerifyPortalTab({
+  credentials = [],
+  agreements = [],
+  presetAudit,
+  onBackToAuth,
+}) {
   const [mode, setMode] = useState(presetAudit?.mode || 'credential');
-  const [targetId, setTargetId] = useState('');
+  const [targetId, setTargetId] = useState(presetAudit?.targetId || '');
   const [jsonText, setJsonText] = useState('');
   const [originalJsonText, setOriginalJsonText] = useState('');
   const [auditResult, setAuditResult] = useState(null);
@@ -24,21 +23,10 @@ export default function VerifyPortalTab({ credentials, agreements, presetAudit }
       setJsonText(formatted);
       setOriginalJsonText(formatted);
       runAudit(presetAudit.mode, presetAudit.targetId, formatted);
-      return;
     }
-    if (credentials.length > 0 && !targetId) {
-      const first = credentials[0];
-      const formatted = JSON.stringify(first.vcDocument, null, 2);
-      setMode('credential');
-      setTargetId(first.id);
-      setJsonText(formatted);
-      setOriginalJsonText(formatted);
-      runAudit('credential', first.id, formatted);
-    }
-  }, [presetAudit, credentials.length]);
+  }, [presetAudit]);
 
   async function runAudit(auditMode = mode, id = targetId, rawText = jsonText) {
-    if (!id) return;
     setVerifying(true);
     try {
       const parsed = rawText ? JSON.parse(rawText) : null;
@@ -64,13 +52,13 @@ export default function VerifyPortalTab({ credentials, agreements, presetAudit }
     runAudit(nextMode, item.id, formatted);
   }
 
-  function simulateFakeEdit() {
+  function mutateSample() {
     try {
       const parsed = JSON.parse(jsonText);
       if (mode === 'credential' && parsed.credentialSubject) {
-        parsed.credentialSubject.statement += ' (Edited without permission)';
+        parsed.credentialSubject.statement += ' [Altered]';
       } else if (parsed.compensation) {
-        parsed.compensation.totalCost = Number(parsed.compensation.totalCost) + 500000;
+        parsed.compensation.totalCost = Number(parsed.compensation.totalCost) + 100000;
       }
       const mutated = JSON.stringify(parsed, null, 2);
       setJsonText(mutated);
@@ -80,198 +68,208 @@ export default function VerifyPortalTab({ credentials, agreements, presetAudit }
     }
   }
 
-  function restoreAuthentic() {
-    setJsonText(originalJsonText);
-    runAudit(mode, targetId, originalJsonText);
-  }
-
   return (
-    <div className="space-y-6">
-      <div className="tw-card p-5 space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900">
-              Instant Public Credential &amp; Agreement Verifier
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-              Any client or employer can independently verify a freelancer&apos;s credential or digital agreement against the blockchain in under 1 second.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
+    <div className="h-full flex flex-col bg-white">
+      <div className="h-14 shrink-0 border-b border-zinc-200 px-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          {onBackToAuth && (
             <button
               type="button"
-              onClick={simulateFakeEdit}
-              className="tw-btn-secondary px-3 py-1.5 text-xs text-rose-700 border-rose-200 hover:bg-rose-50 flex items-center gap-1"
+              onClick={onBackToAuth}
+              className="ui-btn-secondary py-1 px-2.5 text-xs"
             >
-              <AlertTriangle className="w-3.5 h-3.5" />
-              <span>Test Tampered Document</span>
+              ← Sign in
             </button>
+          )}
+          <h1 className="text-sm font-semibold text-zinc-900">
+            Cryptographic Verification Portal
+          </h1>
+        </div>
+
+        {jsonText && (
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={restoreAuthentic}
-              className="tw-btn-secondary px-3 py-1.5 text-xs flex items-center gap-1"
+              onClick={mutateSample}
+              className="ui-btn-secondary py-1 px-2.5 text-xs"
             >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Restore Authentic</span>
+              Simulate Tamper
             </button>
+            {originalJsonText && (
+              <button
+                type="button"
+                onClick={() => {
+                  setJsonText(originalJsonText);
+                  runAudit(mode, targetId, originalJsonText);
+                }}
+                className="ui-btn-secondary py-1 px-2.5 text-xs"
+              >
+                Reset JSON
+              </button>
+            )}
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-slate-100 text-xs">
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">
-              Select a Verified Work Credential
-            </label>
-            <select
-              value={mode === 'credential' ? targetId : ''}
-              onChange={(e) => {
-                const found = credentials.find((c) => c.id === e.target.value);
-                if (found) loadItem('credential', found);
-              }}
-              className="tw-input text-xs"
-            >
-              <option value="">-- Choose Credential --</option>
-              {credentials.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.projectTitle} ({c.subjectName})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">
-              Or Select an On-Chain Digital Agreement
-            </label>
-            <select
-              value={mode === 'agreement' ? targetId : ''}
-              onChange={(e) => {
-                const found = agreements.find((a) => a.id === e.target.value);
-                if (found) loadItem('agreement', found);
-              }}
-              className="tw-input text-xs"
-            >
-              <option value="">-- Choose Digital Agreement --</option>
-              {agreements
-                .filter((a) => a.txHash)
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.title} (v{a.version} · {a.status})
-                  </option>
-                ))}
-            </select>
-          </div>
-        </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        <div className="lg:col-span-6 tw-card p-4 flex flex-col">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-slate-700">
-              Document JSON (Try editing even 1 character and re-verifying)
-            </span>
-            <button
-              type="button"
-              disabled={verifying}
-              onClick={() => runAudit(mode, targetId, jsonText)}
-              className="tw-btn-primary px-3.5 py-1.5 text-xs"
-            >
-              {verifying ? 'Checking Blockchain...' : 'Verify Against Blockchain'}
-            </button>
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
+        {/* Left Input Pane */}
+        <div className="lg:col-span-6 border-r border-zinc-200 p-6 flex flex-col gap-4 overflow-y-auto">
+          {(credentials.length > 0 || agreements.some((a) => a.txHash)) && (
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-medium text-zinc-700 mb-1">Load credential</label>
+                <select
+                  value={mode === 'credential' ? targetId : ''}
+                  onChange={(e) => {
+                    const found = credentials.find((c) => c.id === e.target.value);
+                    if (found) loadItem('credential', found);
+                  }}
+                  className="ui-input"
+                >
+                  <option value="">Select credential...</option>
+                  {credentials.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.projectTitle} ({c.subjectName})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-medium text-zinc-700 mb-1">Load agreement</label>
+                <select
+                  value={mode === 'agreement' ? targetId : ''}
+                  onChange={(e) => {
+                    const found = agreements.find((a) => a.id === e.target.value);
+                    if (found) loadItem('agreement', found);
+                  }}
+                  className="ui-input"
+                >
+                  <option value="">Select agreement...</option>
+                  {agreements
+                    .filter((a) => a.txHash)
+                    .map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.title} (v{a.version})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-3 text-xs">
+            <div>
+              <label className="block font-medium text-zinc-700 mb-1">Record type</label>
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value)}
+                className="ui-input"
+              >
+                <option value="credential">W3C Credential</option>
+                <option value="agreement">Digital Agreement</option>
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="block font-medium text-zinc-700 mb-1">On-Chain Record ID (0x...)</label>
+              <input
+                type="text"
+                placeholder="0x..."
+                value={targetId}
+                onChange={(e) => setTargetId(e.target.value)}
+                className="ui-input font-mono"
+              />
+            </div>
           </div>
-          <textarea
-            rows={18}
-            value={jsonText}
-            onChange={(e) => setJsonText(e.target.value)}
-            className="w-full flex-1 p-3 rounded-xl bg-slate-950 text-emerald-300 font-mono text-xs outline-none"
-          />
+
+          <div className="flex-1 flex flex-col min-h-[260px]">
+            <label className="block text-xs font-medium text-zinc-700 mb-1">
+              Document JSON (paste exported .vc.json or edit to test integrity)
+            </label>
+            <textarea
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              placeholder='Paste W3C Verifiable Credential JSON-LD or Agreement JSON here...'
+              className="w-full flex-1 p-3 rounded-md bg-zinc-950 text-zinc-200 font-mono text-xs outline-none"
+            />
+          </div>
+
+          <button
+            type="button"
+            disabled={verifying}
+            onClick={() => runAudit(mode, targetId, jsonText)}
+            className="ui-btn-primary py-2"
+          >
+            {verifying ? 'Verifying against Smart Contract...' : 'Run Blockchain Audit'}
+          </button>
         </div>
 
-        <div className="lg:col-span-6">
-          {auditResult && (
-            <div
-              className={`tw-card p-6 space-y-4 border-2 ${
-                auditResult.verified
-                  ? 'border-emerald-500 bg-emerald-50/30'
-                  : 'border-rose-500 bg-rose-50/30'
-              }`}
-            >
-              <div className="flex items-center gap-3">
+        {/* Right Result Pane */}
+        <div className="lg:col-span-6 p-6 sm:p-8 overflow-y-auto">
+          {!auditResult ? (
+            <div className="h-full flex items-center justify-center text-xs text-zinc-400">
+              Select or paste a credential or agreement JSON to verify its Keccak-256 hash, signatures, and revocation status on-chain.
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div
+                className={`p-4 rounded-lg border flex items-start gap-3 ${
+                  auditResult.verified
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                    : 'bg-red-50 border-red-200 text-red-950'
+                }`}
+              >
                 {auditResult.verified ? (
-                  <CheckCircle2 className="w-8 h-8 text-emerald-600 shrink-0" />
+                  <Check className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
                 ) : (
-                  <XCircle className="w-8 h-8 text-rose-600 shrink-0" />
+                  <X className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
                 )}
                 <div>
-                  <h3 className="font-bold text-lg text-slate-900">
+                  <div className="text-sm font-semibold">
                     {auditResult.verified
-                      ? 'Authentic & Untampered On-Chain Record'
-                      : 'Verification Failed — Tampered or Revoked'}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Verified in <strong>{auditResult.auditDurationMs ?? '<1'} ms</strong> against
-                    EVM Smart Contract
-                  </p>
+                      ? 'Authentic On-Chain Record'
+                      : 'Verification Failed'}
+                  </div>
+                  <div className="text-xs opacity-80 mt-0.5">
+                    {auditResult.error ||
+                      `Completed in ${auditResult.auditDurationMs ?? '<1'} ms against TrustWorkProtocol.sol`}
+                  </div>
                 </div>
               </div>
 
               {auditResult.checks && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {Object.entries(auditResult.checks).map(([k, ok]) => (
-                    <div
-                      key={k}
-                      className={`p-3 rounded-xl border text-xs font-medium flex items-center justify-between ${
-                        ok
-                          ? 'bg-white border-emerald-200 text-emerald-800'
-                          : 'bg-rose-100 border-rose-300 text-rose-900'
-                      }`}
-                    >
-                      <span>{k}</span>
-                      <span className="font-bold">{ok ? 'PASS ✓' : 'FAIL ✗'}</span>
+                <div className="border border-zinc-200 rounded-lg divide-y divide-zinc-200 text-xs">
+                  {Object.entries(auditResult.checks).map(([k, passed]) => (
+                    <div key={k} className="p-3 flex items-center justify-between">
+                      <span className="text-zinc-700 font-mono">{k}</span>
+                      <span
+                        className={`font-semibold ${
+                          passed ? 'text-emerald-700' : 'text-red-600'
+                        }`}
+                      >
+                        {passed ? 'PASS' : 'FAIL'}
+                      </span>
                     </div>
                   ))}
                 </div>
               )}
 
               {auditResult.cryptography && (
-                <div className="rounded-xl bg-slate-900 text-slate-200 p-4 text-xs font-mono space-y-1.5">
+                <div className="p-4 rounded-lg bg-zinc-950 text-zinc-300 font-mono text-xs space-y-1.5">
                   <div className="break-all">
-                    <span className="text-slate-400">Recomputed Keccak-256: </span>
-                    <span
-                      className={
-                        auditResult.checks?.payloadIntegrityIntact
-                          ? 'text-emerald-400'
-                          : 'text-rose-400'
-                      }
-                    >
-                      {auditResult.cryptography.recomputedKeccak256}
-                    </span>
+                    Recomputed Keccak-256: {auditResult.cryptography.recomputedKeccak256}
                   </div>
                   {auditResult.mode === 'credential' ? (
                     <div>
-                      <span className="text-slate-400">Issuer: </span>
-                      <span className="text-sky-300">
-                        {auditResult.issuerSummary?.name ||
-                          shortHex(auditResult.cryptography.onChainIssuerAddress)}{' '}
-                        ({auditResult.issuerSummary?.issuerTier})
-                      </span>
+                      Issuer: {auditResult.issuerSummary?.name || shortHex(auditResult.cryptography.onChainIssuerAddress)} ({auditResult.issuerSummary?.issuerTier})
                     </div>
                   ) : (
                     <div>
-                      <span className="text-slate-400">Agreement Status: </span>
-                      <span className="text-sky-300">
-                        Version {auditResult.cryptography.version} ·{' '}
-                        {auditResult.cryptography.onChainStatus}
-                      </span>
+                      Status: v{auditResult.cryptography.version} · {auditResult.cryptography.onChainStatus}
                     </div>
                   )}
                   {auditResult.cryptography.blockNumber && (
-                    <div className="break-all">
-                      <span className="text-slate-400">
-                        Block #{auditResult.cryptography.blockNumber} Tx:{' '}
-                      </span>
-                      <span className="text-amber-300">{auditResult.cryptography.txHash}</span>
+                    <div className="break-all text-emerald-400">
+                      Block #{auditResult.cryptography.blockNumber} · Tx {auditResult.cryptography.txHash}
                     </div>
                   )}
                 </div>

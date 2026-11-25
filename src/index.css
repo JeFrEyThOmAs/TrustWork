@@ -1,10 +1,18 @@
 @import "tailwindcss";
 
 @layer base {
-  body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: #f8fafc;
-    color: #0f172a;
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background-color: #ffffff;
+    color: #09090b;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
   }
 
   code,
@@ -14,68 +22,78 @@
   }
 }
 
-.tw-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.875rem;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.02);
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
-.tw-card-hover {
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
-}
-
-.tw-card-hover:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.07), 0 4px 10px -4px rgba(15, 23, 42, 0.04);
-}
-
-.tw-input {
+.ui-input {
   width: 100%;
   background: #ffffff;
-  border: 1px solid #cbd5e1;
-  border-radius: 0.625rem;
-  padding: 0.55rem 0.8rem;
-  font-size: 0.875rem;
-  color: #0f172a;
+  border: 1px solid #d4d4d8;
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: #09090b;
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.tw-input:focus {
-  border-color: #4f46e5;
-  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+.ui-input:focus {
+  border-color: #18181b;
+  box-shadow: 0 0 0 2px rgba(24, 24, 27, 0.08);
 }
 
-.tw-btn-primary {
-  background: #4f46e5;
+.ui-btn-primary {
+  background-color: #18181b;
   color: #ffffff;
-  font-weight: 600;
-  border-radius: 0.625rem;
-  transition: background-color 0.15s ease, transform 0.1s ease;
+  border: 1px solid #18181b;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.45rem 0.875rem;
+  transition: background-color 0.12s ease;
   cursor: pointer;
 }
 
-.tw-btn-primary:hover:not(:disabled) {
-  background: #4338ca;
+.ui-btn-primary:hover:not(:disabled) {
+  background-color: #27272a;
 }
 
-.tw-btn-primary:disabled {
-  opacity: 0.55;
+.ui-btn-primary:disabled {
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-.tw-btn-secondary {
-  background: #ffffff;
-  color: #1e293b;
-  border: 1px solid #cbd5e1;
-  font-weight: 600;
-  border-radius: 0.625rem;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+.ui-btn-secondary {
+  background-color: #ffffff;
+  color: #18181b;
+  border: 1px solid #d4d4d8;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.45rem 0.875rem;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
   cursor: pointer;
 }
 
-.tw-btn-secondary:hover:not(:disabled) {
-  background: #f8fafc;
-  border-color: #94a3b8;
+.ui-btn-secondary:hover:not(:disabled) {
+  background-color: #f4f4f5;
+  border-color: #a1a1aa;
+}
+
+.ui-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1rem;
+  border: 1px solid transparent;
 }

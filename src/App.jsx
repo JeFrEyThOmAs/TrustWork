@@ -1,58 +1,95 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import Navbar from './components/Navbar.jsx';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import AuthScreen from './components/AuthScreen.jsx';
+import Sidebar from './components/Navbar.jsx';
+import { KeypairVaultModal } from './components/CryptoSignModal.jsx';
 import ExploreGigsTab from './components/ExploreGigsTab.jsx';
 import TalentDirectoryTab from './components/TalentDirectoryTab.jsx';
 import MyGigsProposalsTab from './components/MyGigsProposalsTab.jsx';
 import ContractsWorkspaceTab from './components/ContractsWorkspaceTab.jsx';
 import ReputationPassportTab from './components/ReputationPassportTab.jsx';
 import VerifyPortalTab from './components/VerifyPortalTab.jsx';
-import { apiFetch, connectBrowserWallet } from './lib/wallet.js';
+import { apiFetch, getStoredToken, setStoredToken } from './lib/wallet.js';
 
 export default function App() {
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [publicVerifierMode, setPublicVerifierMode] = useState(false);
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('explore');
-  const [currentUserDid, setCurrentUserDid] = useState('');
   const [selectedAgreementId, setSelectedAgreementId] = useState(null);
   const [inspectedDid, setInspectedDid] = useState(null);
   const [directHirePrefill, setDirectHirePrefill] = useState(null);
   const [presetAudit, setPresetAudit] = useState(null);
   const [postGigOpen, setPostGigOpen] = useState(false);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [keypairOpen, setKeypairOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
-  function showToast(message, type = 'success') {
+  function showToast(message, type = 'info') {
     setToast({ message, type });
     setTimeout(() => {
       setToast((prev) => (prev?.message === message ? null : prev));
-    }, 5500);
+    }, 4500);
   }
 
-  async function refreshBootstrap() {
+  const refreshBootstrap = useCallback(async () => {
+    const token = getStoredToken();
+    if (!token) {
+      setAuthenticated(false);
+      setData(null);
+      setAuthChecked(true);
+      return;
+    }
     try {
       const res = await apiFetch('/api/bootstrap');
       setData(res);
-      if (!currentUserDid && res.identities?.length > 0) {
-        setCurrentUserDid(res.identities[0].did);
-      }
-      if (!selectedAgreementId && res.agreements?.length > 0) {
-        setSelectedAgreementId(res.agreements[0].id);
-      }
+      setAuthenticated(true);
     } catch (err) {
-      showToast(err.message, 'error');
+      if (err.status === 401) {
+        setStoredToken('');
+        setAuthenticated(false);
+        setData(null);
+      } else {
+        showToast(err.message, 'error');
+      }
     } finally {
-      setLoading(false);
+      setAuthChecked(true);
     }
-  }
+  }, []);
 
   useEffect(() => {
     refreshBootstrap();
-  }, []);
+  }, [refreshBootstrap]);
 
-  const currentUser = useMemo(() => {
-    if (!data?.identities) return null;
-    return data.identities.find((u) => u.did === currentUserDid) || data.identities[0] || null;
-  }, [data, currentUserDid]);
+  // Real-time Server-Sent Events sync across multiple browsers/tabs
+  useEffect(() => {
+    if (!authenticated) return undefined;
+    const es = new EventSource('/api/events');
+    es.onmessage = (evt) => {
+      try {
+        const parsed = JSON.parse(evt.data);
+        if (parsed.type && parsed.type !== 'connected') {
+          refreshBootstrap();
+        }
+      } catch {
+        // ignore
+      }
+    };
+    return () => es.close();
+  }, [authenticated, refreshBootstrap]);
+
+  async function handleLogout() {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST', body: '{}' });
+    } catch {
+      // ignore
+    }
+    setStoredToken('');
+    setAuthenticated(false);
+    setData(null);
+    setActiveTab('explore');
+  }
+
+  const currentUser = data?.currentUser || null;
 
   const pendingContractActions = useMemo(() => {
     if (!data?.agreements || !currentUser) return 0;
@@ -74,92 +111,70 @@ export default function App() {
       );
   }, [data, currentUser]);
 
-  if (loading || !data) {
+  if (!authChecked) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="tw-card p-6 text-center space-y-2">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white font-extrabold text-lg flex items-center justify-center mx-auto">
-            T
-          </div>
-          <div className="font-bold text-sm text-slate-800">Loading TrustWork Marketplace...</div>
-          <p className="text-xs text-slate-500">Syncing gigs, digital agreements &amp; on-chain credentials</p>
-        </div>
+      <div className="h-screen w-screen flex items-center justify-center bg-white text-xs text-zinc-500">
+        Loading workspace...
       </div>
     );
   }
 
+  if (!authenticated && publicVerifierMode) {
+    return (
+      <div className="h-screen w-screen overflow-hidden">
+        <VerifyPortalTab onBackToAuth={() => setPublicVerifierMode(false)} />
+      </div>
+    );
+  }
+
+  if (!authenticated || !data) {
+    return (
+      <AuthScreen
+        onAuthenticated={() => {
+          refreshBootstrap();
+        }}
+        onOpenPublicVerifier={() => setPublicVerifierMode(true)}
+      />
+    );
+  }
+
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
-      <Navbar
+    <div className="h-screen w-screen overflow-hidden flex bg-white">
+      <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        identities={data.identities}
         currentUser={currentUser}
-        setCurrentUserDid={(did) => {
-          setCurrentUserDid(did);
-          setInspectedDid(did);
-        }}
         chainStatus={data.chainStatus}
         pendingContractActions={pendingContractActions}
         pendingProposalActions={pendingProposalActions}
         onOpenPostGig={() => setPostGigOpen(true)}
-        onOpenAuthModal={() => setAuthModalOpen(true)}
+        onOpenKeypair={() => setKeypairOpen(true)}
+        onLogout={handleLogout}
       />
 
-      {toast && (
-        <div className="fixed bottom-5 right-5 z-50 max-w-md">
-          <div
-            className={`rounded-xl px-4 py-3 shadow-lg border text-xs font-medium flex items-center justify-between gap-3 ${
-              toast.type === 'error'
-                ? 'bg-rose-50 border-rose-300 text-rose-900'
-                : 'bg-slate-900 border-slate-700 text-white'
-            }`}
-          >
-            <span>{toast.message}</span>
-            <button
-              type="button"
-              onClick={() => setToast(null)}
-              className="text-slate-400 hover:text-white font-bold cursor-pointer"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
-
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 flex-1">
+      <main className="flex-1 min-w-0 h-full overflow-hidden">
         {activeTab === 'explore' && (
           <ExploreGigsTab
             gigs={data.gigs}
             currentUser={currentUser}
-            pendingContractActions={pendingContractActions}
             onOpenPostGig={() => setPostGigOpen(true)}
-            onNavigate={setActiveTab}
-            onRefresh={refreshBootstrap}
-            showToast={showToast}
-          />
-        )}
-
-        {activeTab === 'talent' && (
-          <TalentDirectoryTab
-            identities={data.identities}
-            credentials={data.credentials}
-            currentUser={currentUser}
+            onOpenContract={(agId) => {
+              setSelectedAgreementId(agId);
+              setActiveTab('contracts');
+            }}
             onInspectPassport={(did) => {
               setInspectedDid(did);
               setActiveTab('reputation');
             }}
-            onStartDirectAgreement={(freelancer) => {
-              setDirectHirePrefill(freelancer);
-              setActiveTab('contracts');
-            }}
+            onRefresh={refreshBootstrap}
+            showToast={showToast}
           />
         )}
 
         {activeTab === 'my-gigs' && (
           <MyGigsProposalsTab
             gigs={data.gigs}
-            proposals={data.proposals}
+            myProposals={data.myProposals}
             currentUser={currentUser}
             onOpenPostGig={() => setPostGigOpen(true)}
             onInspectPassport={(did) => {
@@ -196,13 +211,28 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'talent' && (
+          <TalentDirectoryTab
+            identities={data.identities}
+            credentials={data.credentials}
+            currentUser={currentUser}
+            onInspectPassport={(did) => {
+              setInspectedDid(did);
+              setActiveTab('reputation');
+            }}
+            onStartDirectAgreement={(freelancer) => {
+              setDirectHirePrefill(freelancer);
+              setActiveTab('contracts');
+            }}
+          />
+        )}
+
         {activeTab === 'reputation' && (
           <ReputationPassportTab
             identities={data.identities}
             credentials={data.credentials}
             zkpProofs={data.zkpProofs}
             recentTransactions={data.recentTransactions}
-            smartDataSeparation={data.smartDataSeparation}
             trustGraph={data.trustGraph}
             currentUser={currentUser}
             inspectedDid={inspectedDid}
@@ -225,41 +255,43 @@ export default function App() {
         )}
       </main>
 
-      <footer className="bg-white border-t border-slate-200 py-5 px-6 text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="font-semibold text-slate-700">
-            TrustWork — Verify the work. Trust the professional.
-          </div>
-          <div>
-            Self-Controlled W3C DIDs · Dual-Signed Blockchain Digital Agreements · Portable Verifiable Credentials
+      {toast && (
+        <div className="fixed bottom-4 right-4 z-50 max-w-sm">
+          <div
+            className={`px-4 py-2.5 rounded-md shadow-lg border text-xs flex items-center justify-between gap-3 ${
+              toast.type === 'error'
+                ? 'bg-red-50 border-red-200 text-red-800'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-100'
+            }`}
+          >
+            <span>{toast.message}</span>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              className="opacity-70 hover:opacity-100 cursor-pointer"
+            >
+              ×
+            </button>
           </div>
         </div>
-      </footer>
+      )}
 
       {postGigOpen && (
         <PostGigModal
-          currentUser={currentUser}
           onClose={() => setPostGigOpen(false)}
           onCreated={async () => {
             setPostGigOpen(false);
             await refreshBootstrap();
             setActiveTab('explore');
-            showToast('Your gig is now live on the TrustWork Marketplace!');
+            showToast('Gig published.');
           }}
           showToast={showToast}
         />
       )}
 
-      {authModalOpen && (
-        <AuthModal
-          onClose={() => setAuthModalOpen(false)}
-          onAuthenticated={async (did, name) => {
-            setAuthModalOpen(false);
-            await refreshBootstrap();
-            setCurrentUserDid(did);
-            setInspectedDid(did);
-            showToast(`Signed in as ${name}`);
-          }}
+      {keypairOpen && (
+        <KeypairVaultModal
+          onClose={() => setKeypairOpen(false)}
           showToast={showToast}
         />
       )}
@@ -267,19 +299,20 @@ export default function App() {
   );
 }
 
-function PostGigModal({ currentUser, onClose, onCreated, showToast }) {
+function PostGigModal({ onClose, onCreated, showToast }) {
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState('Full-Stack Development');
+  const [category, setCategory] = useState('Software Development');
   const [description, setDescription] = useState('');
-  const [budgetMin, setBudgetMin] = useState(150000);
-  const [budgetMax, setBudgetMax] = useState(250000);
+  const [budgetMin, setBudgetMin] = useState(50000);
+  const [budgetMax, setBudgetMax] = useState(120000);
   const [currency, setCurrency] = useState('INR');
   const [durationDays, setDurationDays] = useState(21);
-  const [deadline, setDeadline] = useState('2026-12-28');
-  const [skillsText, setSkillsText] = useState('React, Node.js, PostgreSQL, TypeScript');
+  const [deadline, setDeadline] = useState(
+    new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10)
+  );
+  const [skillsText, setSkillsText] = useState('');
   const [features, setFeatures] = useState([
-    { name: 'Core Application & API', acceptanceCriteria: 'All endpoints & UI working' },
-    { name: 'Automated Tests & Deployment', acceptanceCriteria: 'CI green + live staging link' },
+    { name: '', acceptanceCriteria: 'Meets specification' },
   ]);
   const [busy, setBusy] = useState(false);
 
@@ -290,7 +323,6 @@ function PostGigModal({ currentUser, onClose, onCreated, showToast }) {
       await apiFetch('/api/gigs', {
         method: 'POST',
         body: JSON.stringify({
-          posterDid: currentUser.did,
           title,
           category,
           description,
@@ -303,7 +335,7 @@ function PostGigModal({ currentUser, onClose, onCreated, showToast }) {
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean),
-          features,
+          features: features.filter((f) => f.name.trim()),
         }),
       });
       await onCreated();
@@ -315,136 +347,131 @@ function PostGigModal({ currentUser, onClose, onCreated, showToast }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="tw-card max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
-        <div className="flex items-start justify-between border-b border-slate-200 pb-3">
-          <div>
-            <span className="text-xs font-bold text-indigo-600 uppercase">Post a Gig</span>
-            <h3 className="text-lg font-bold text-slate-900 mt-0.5">
-              Hire Verified Freelancers on TrustWork
-            </h3>
-            <p className="text-xs text-slate-500">
-              Posting as <strong>{currentUser?.name}</strong>
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="tw-btn-secondary px-3 py-1.5 text-xs">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white border border-zinc-200 rounded-lg shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
+          <h3 className="text-base font-semibold text-zinc-900">Post a Gig</h3>
+          <button type="button" onClick={onClose} className="ui-btn-secondary py-1 px-2.5 text-xs">
             Cancel
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="sm:col-span-2">
-              <label className="block font-semibold text-slate-700 mb-1">Gig Title</label>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <label className="block font-medium text-zinc-700 mb-1">Gig title</label>
               <input
                 type="text"
                 required
-                placeholder="e.g. Build Real-Time SaaS Billing & Analytics Dashboard"
+                placeholder="e.g. Build Payment Webhook Service"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="tw-input text-xs"
+                className="ui-input"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Category</label>
+              <label className="block font-medium text-zinc-700 mb-1">Category</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="tw-input text-xs"
+                className="ui-input"
               >
-                <option>Full-Stack Development</option>
-                <option>Backend &amp; Distributed Systems</option>
-                <option>AI &amp; Machine Learning</option>
-                <option>UI/UX &amp; Product Design</option>
-                <option>Mobile Development</option>
-                <option>Smart Contracts &amp; Web3</option>
+                <option>Software Development</option>
+                <option>Backend &amp; Systems</option>
+                <option>AI &amp; Data</option>
+                <option>Product Design</option>
+                <option>Mobile Engineering</option>
+                <option>Smart Contracts</option>
               </select>
             </div>
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Project Description</label>
+            <label className="block font-medium text-zinc-700 mb-1">Description</label>
             <textarea
               rows={3}
               required
-              placeholder="Describe what you need built, key goals, and technical expectations..."
+              placeholder="Outline requirements, architecture context, and deliverables..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="tw-input text-xs"
+              className="ui-input"
             />
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Min Budget</label>
+              <label className="block font-medium text-zinc-700 mb-1">Min budget ({currency})</label>
               <input
                 type="number"
                 required
                 value={budgetMin}
                 onChange={(e) => setBudgetMin(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input tabular-nums"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Max Budget</label>
+              <label className="block font-medium text-zinc-700 mb-1">Max budget ({currency})</label>
               <input
                 type="number"
                 required
                 value={budgetMax}
                 onChange={(e) => setBudgetMax(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input tabular-nums"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Duration (Days)</label>
+              <label className="block font-medium text-zinc-700 mb-1">Duration (days)</label>
               <input
                 type="number"
                 required
                 value={durationDays}
                 onChange={(e) => setDurationDays(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input tabular-nums"
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Target Deadline</label>
+              <label className="block font-medium text-zinc-700 mb-1">Deadline</label>
               <input
                 type="date"
                 required
                 value={deadline}
                 onChange={(e) => setDeadline(e.target.value)}
-                className="tw-input text-xs font-mono"
+                className="ui-input font-mono"
               />
             </div>
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Required Skills</label>
+            <label className="block font-medium text-zinc-700 mb-1">Skills (comma-separated)</label>
             <input
               type="text"
+              placeholder="Node.js, PostgreSQL, TypeScript"
               value={skillsText}
               onChange={(e) => setSkillsText(e.target.value)}
-              className="tw-input text-xs"
+              className="ui-input"
             />
           </div>
 
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+          <div className="border border-zinc-200 rounded-lg p-3.5 bg-zinc-50/50 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-700">Expected Features / Deliverables</span>
+              <span className="font-medium text-zinc-800">Features / Deliverables</span>
               <button
                 type="button"
                 onClick={() =>
-                  setFeatures([...features, { name: '', acceptanceCriteria: 'Verified pass' }])
+                  setFeatures([
+                    ...features,
+                    { name: '', acceptanceCriteria: 'Meets specification' },
+                  ])
                 }
-                className="text-indigo-600 font-semibold hover:underline cursor-pointer"
+                className="text-zinc-900 underline cursor-pointer"
               >
-                + Add Feature
+                + Add feature
               </button>
             </div>
             {features.map((f, idx) => (
-              <div key={idx} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div key={idx} className="grid grid-cols-2 gap-2">
                 <input
                   type="text"
-                  required
                   placeholder="Feature name"
                   value={f.name}
                   onChange={(e) => {
@@ -452,7 +479,7 @@ function PostGigModal({ currentUser, onClose, onCreated, showToast }) {
                     next[idx] = { ...next[idx], name: e.target.value };
                     setFeatures(next);
                   }}
-                  className="tw-input text-xs"
+                  className="ui-input"
                 />
                 <input
                   type="text"
@@ -463,229 +490,20 @@ function PostGigModal({ currentUser, onClose, onCreated, showToast }) {
                     next[idx] = { ...next[idx], acceptanceCriteria: e.target.value };
                     setFeatures(next);
                   }}
-                  className="tw-input text-xs"
+                  className="ui-input"
                 />
               </div>
             ))}
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="tw-btn-secondary px-4 py-2 text-xs">
+            <button type="button" onClick={onClose} className="ui-btn-secondary">
               Cancel
             </button>
-            <button type="submit" disabled={busy} className="tw-btn-primary px-5 py-2 text-xs">
+            <button type="submit" disabled={busy} className="ui-btn-primary">
               {busy ? 'Publishing...' : 'Publish Gig'}
             </button>
           </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function AuthModal({ onClose, onAuthenticated, showToast }) {
-  const [tab, setTab] = useState('signup');
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [headline, setHeadline] = useState('Full-Stack Developer & Startup Founder');
-  const [hourlyRate, setHourlyRate] = useState(3500);
-  const [organization, setOrganization] = useState('');
-  const [skillsText, setSkillsText] = useState('React, TypeScript, Node.js, Solidity');
-  const [externalAddress, setExternalAddress] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  async function handleConnectWallet() {
-    try {
-      const { address } = await connectBrowserWallet();
-      setExternalAddress(address);
-      showToast(`Connected wallet ${address.slice(0, 10)}...`);
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      if (tab === 'login') {
-        const res = await apiFetch('/api/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({ email, password }),
-        });
-        await onAuthenticated(res.identity.did, res.identity.name);
-      } else {
-        const res = await apiFetch('/api/identities', {
-          method: 'POST',
-          body: JSON.stringify({
-            name,
-            email,
-            password: password || 'demo123',
-            headline,
-            hourlyRate: Number(hourlyRate),
-            organization,
-            skills: skillsText
-              .split(',')
-              .map((s) => s.trim())
-              .filter(Boolean),
-            externalAddress: externalAddress || null,
-          }),
-        });
-        await onAuthenticated(res.identity.did, res.identity.name);
-      }
-    } catch (err) {
-      showToast(err.message, 'error');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="tw-card max-w-md w-full p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setTab('signup')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                tab === 'signup' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              Create Account
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab('login')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                tab === 'login' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              Log In
-            </button>
-          </div>
-          <button type="button" onClick={onClose} className="tw-btn-secondary px-2.5 py-1 text-xs">
-            Close
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-3 text-xs">
-          {tab === 'signup' ? (
-            <>
-              <p className="text-slate-500">
-                One unified TrustWork account lets you <strong>apply to gigs as a freelancer</strong> and <strong>post gigs to hire talent</strong>, backed by your own blockchain DID.
-              </p>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Full Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Jeffrey Thomas"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="tw-input text-xs"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Email</label>
-                  <input
-                    type="email"
-                    required
-                    placeholder="you@domain.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="tw-input text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Password</label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="tw-input text-xs"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Professional Headline</label>
-                <input
-                  type="text"
-                  value={headline}
-                  onChange={(e) => setHeadline(e.target.value)}
-                  className="tw-input text-xs"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Skills (comma-separated)</label>
-                <input
-                  type="text"
-                  value={skillsText}
-                  onChange={(e) => setSkillsText(e.target.value)}
-                  className="tw-input text-xs"
-                />
-              </div>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-700">Blockchain DID Wallet (Optional)</span>
-                  <button
-                    type="button"
-                    onClick={handleConnectWallet}
-                    className="text-indigo-600 font-semibold hover:underline cursor-pointer"
-                  >
-                    Connect MetaMask
-                  </button>
-                </div>
-                <input
-                  type="text"
-                  placeholder="Leave blank to auto-generate your self-custodial DID keypair"
-                  value={externalAddress}
-                  onChange={(e) => setExternalAddress(e.target.value)}
-                  className="tw-input text-xs font-mono"
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-slate-500">
-                Log in with email &amp; password (seeded demo accounts like <code>mili@trustwork.io</code> use password <code>demo123</code>), or switch accounts anytime from the navbar.
-              </p>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="mili@trustwork.io"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="tw-input text-xs"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Password</label>
-                <input
-                  type="password"
-                  required
-                  placeholder="demo123"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="tw-input text-xs"
-                />
-              </div>
-            </>
-          )}
-
-          <button type="submit" disabled={busy} className="tw-btn-primary w-full py-2.5 text-xs">
-            {busy
-              ? 'Processing...'
-              : tab === 'signup'
-                ? 'Create Account & Mint Blockchain DID'
-                : 'Log In'}
-          </button>
         </form>
       </div>
     </div>

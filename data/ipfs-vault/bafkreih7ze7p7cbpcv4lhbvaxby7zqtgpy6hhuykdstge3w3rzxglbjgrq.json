@@ -1,0 +1,62 @@
+{
+  "cid": "bafkreih7ze7p7cbpcv4lhbvaxby7zqtgpy6hhuykdstge3w3rzxglbjgrq",
+  "pinnedAt": "2026-11-25T16:07:40.268Z",
+  "sizeBytes": 1697,
+  "metadata": {
+    "type": "DIGITAL_AGREEMENT_V1",
+    "proposalId": "prop-bb7cacf1f993",
+    "agreementId": "0xa13ec3746d83425b74ab0c926b687897ec34e5a91ba8c29a2860abd179170218"
+  },
+  "content": {
+    "schema": "trustwork.digital-agreement.v2",
+    "version": 1,
+    "parentAgreementId": null,
+    "title": "e-commerce website",
+    "summary": "it should be for a textile business",
+    "category": "Software Development",
+    "parties": {
+      "gigProviderDid": "did:trustwork:0x85A24039edF2602f88Ada2CdD31ec3f1B95c9758",
+      "freelancerDid": "did:trustwork:0x7101439F770790B96694f030B82aDf5EfE749817"
+    },
+    "timeline": {
+      "startDate": "2026-11-25",
+      "deadline": "2026-12-16",
+      "durationDays": 21
+    },
+    "compensation": {
+      "totalCost": 85000,
+      "currency": "INR",
+      "paymentSchedule": "Milestone-Based (2 Stages)"
+    },
+    "features": [
+      {
+        "index": 1,
+        "name": "cart",
+        "description": "",
+        "acceptanceCriteria": "Meets specification"
+      }
+    ],
+    "milestones": [
+      {
+        "index": 1,
+        "title": "Milestone 1: Initial Implementation",
+        "deliverables": "Core modules and source repository",
+        "dueDate": "2026-12-16",
+        "amount": 42500
+      },
+      {
+        "index": 2,
+        "title": "Milestone 2: Final Delivery & Verification",
+        "deliverables": "Production build and test suite",
+        "dueDate": "2026-12-16",
+        "amount": 42500
+      }
+    ],
+    "clauses": {
+      "ipTransfer": "Intellectual property rights transfer to the Gig Provider upon milestone approval.",
+      "confidentiality": "Both parties agree to maintain confidentiality of source code and business information.",
+      "governance": "Dual-Signature Lock: Neither party may unilaterally modify timeline, compensation, or agreed features. Any change requires cryptographic signatures from both parties, creating a new linked agreement version on-chain."
+    },
+    "amendmentReason": ""
+  }
+}
